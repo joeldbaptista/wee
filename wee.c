@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -49,6 +50,8 @@ struct sbuf {
 
 static struct termios origterm;
 
+static volatile sig_atomic_t winch;
+
 static struct {
 	int screenrows;
 	int screencols;
@@ -82,6 +85,13 @@ static int linecount(void);
 static void normreset(void);
 static void yankset(size_t a, size_t b, bool linewise);
 static void bufdelrange(size_t a, size_t b);
+static void setwinsz(void);
+
+static void onsigwinch(int sig)
+{
+	(void)sig;
+	winch = 1;
+}
 
 static void die(const char *fmt, ...)
 {
@@ -193,11 +203,18 @@ static int readkey(void)
 	ssize_t n;
 
 	for (;;) {
+		if (winch)
+			return knull;
 		n = read(STDIN_FILENO, &c, 1);
 		if (n == 1)
 			break;
-		if (n == -1 && errno != EAGAIN)
+		if (n == -1) {
+			if (errno == EAGAIN)
+				continue;
+			if (errno == EINTR)
+				return knull;
 			die("read: %s", strerror(errno));
+		}
 	}
 
 	if (c == '\x1b') {
@@ -659,6 +676,14 @@ static void setwinsz(void)
 	E.textrows = E.screenrows - 2;
 	if (E.textrows < 1)
 		E.textrows = 1;
+}
+
+static void winchtick(void)
+{
+	if (!winch)
+		return;
+	winch = 0;
+	setwinsz();
 }
 
 static void filenew(void)
@@ -1594,8 +1619,17 @@ static void processkey(void)
 
 int main(int argc, char **argv)
 {
+	struct sigaction sa;
+
 	rawon();
 	setwinsz();
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = onsigwinch;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	if (sigaction(SIGWINCH, &sa, NULL) == -1)
+		die("sigaction: %s", strerror(errno));
 
 	E.mode = mnormal;
 	E.filename = NULL;
@@ -1619,9 +1653,10 @@ int main(int argc, char **argv)
 		fileopen(E.filename);
 	}
 
-	setstatus("NORMAL  i a A o O  :w  :q");
+	setstatus("NORMAL");
 
 	for (;;) {
+		winchtick();
 		refresh();
 		processkey();
 	}
