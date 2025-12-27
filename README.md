@@ -1,9 +1,9 @@
-# `wee` - an exercise in simplicity
+# wee
 
-`wee` is a very simple vi-clone in a **single** C file, and free of 3rd-party libraries. 
-As such is it purposely restricted, and is more in tune with `busybox` vi than with `vim`. 
+`wee` is a minimal vi-like editor in a **single C file**.
+It aims to stay small and dependency-free (closer in spirit to `busybox vi` than `vim`).
 
-The fundamental data structure that holds the text is a single text buffer array.
+The editing model is intentionally simple: the file is stored as one contiguous byte buffer with `\n` line breaks.
 
 ## build
 
@@ -12,37 +12,33 @@ make
 ./wee [file]
 ```
 
-## current status
+## quick start
 
-Implemented (so far):
+- Start in **NORMAL** mode.
+- Enter **INSERT** mode with `i`, `a`, `A`, `o`, `O`, or `C`.
+- `Esc` returns to **NORMAL** (and steps the cursor back one character if possible).
+- `:` opens the ex command line (**CMD** mode).
+- `Ctrl-Q` quits immediately.
 
-1. Raw terminal UI (screen redraw, status line)
-2. Normal/insert/command modes
-3. Basic UTF-8 *safe cursor stepping* (won't split codepoints on h/l and backspace)
-4. Counts for motions (e.g. `4j`, `10k`, `3w`)
-5. Word motions: `w`, `b`, `e`
-6. Line motions: `0`, `$`, `gg`, `G`, `23G`
-7. Operators (small subset): `dd`, `yy`, `p`, plus `d{motion}`, `y{motion}`, `c{motion}` for `w/b/e/0/$/gg/G/h/j/k/l`
-8. Ex commands: `:w`, `:q`, `:q!`, `:wq`
+## implemented
 
-## roadmap
+- Modes: NORMAL / INSERT / CMD
+- Raw terminal UI with status line
+- Motions: `h j k l`, `w b e`, `0 $`, `gg`, `G`, `{n}G`, `t{char}`
+- Counts: `{n}{motion}` and `{n}{op}{motion}` where supported
+- Operators: `d`, `y`, `c` with motions; plus `dd`, `yy`, `p`, `x`, `C`
+- Text objects (inner): `di{char}`, `yi{char}`, `ci{char}` for paired delimiters
+- Ex commands: `:w`, `:q`, `:q!`, `:wq`
+- Options: `:set nu`, `:set nonu`, `:set rnu`, `:set nornu`
+- Line number gutter: absolute and relative numbering
+- Tabs: insert literal `\t`, render with fixed tabstop of 8
+- Cursor shape: bar in INSERT and block in NORMAL/CMD (terminal support permitting)
 
-Planned vi-ish features (non-exhaustive):
+## command reference
 
-`wee` supports the following:
+See [CHEATSHEET.md](CHEATSHEET.md) for the full list of implemented commands.
 
-1. UTF-8 without depedencies
-2. Character move with count (e.g. 4j, 10k, etc)
-3. Word-based move with count (e.g. 4w, 8b, 3e, etc)
-4. Move to begin and end of line (e.g. 0 begin and $ end)
-4. Word-base delete (e.g. d3w), delete in (e.g. di(, di[, etc)
-5. Goto to line (e.g. gg top, G bottom, 23G)
-6. Cut between (e.g. ci(, ci[), cut till (e.g. ct), cti), cut till end (e.g. C)
-7. Delete line (dd), yank line (yy), paste (p)
+## notes / constraints
 
-Amoung others...
-
-## notes
-
-- `wee` intentionally keeps the editing model simple: one contiguous byte buffer containing `\n`.
-- This is an evolving exercise; behavior will drift toward classic vi where it makes sense.
+- This is intentionally not `vim`: no plugins, no split windows, no full compatibility goals.
+- UTF-8 handling is “safe stepping” (avoid splitting continuation bytes); display width is still simplified.
