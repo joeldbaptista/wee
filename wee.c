@@ -37,6 +37,10 @@ enum mode {
 	mcmd,
 };
 
+enum {
+	tabstop = 8,
+};
+
 struct sbuf {
 	char *s;
 	size_t len;
@@ -70,7 +74,14 @@ static struct {
 	time_t statustime;
 
 	struct sbuf cmd;
+	bool shownum;
+	bool shownumrel;
 } E;
+
+static int linecount(void);
+static void normreset(void);
+static void yankset(size_t a, size_t b, bool linewise);
+static void bufdelrange(size_t a, size_t b);
 
 static void die(const char *fmt, ...)
 {
@@ -153,6 +164,7 @@ static int getwinsz(int *rows, int *cols)
 static void rawoff(void)
 {
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &origterm);
+	write(STDOUT_FILENO, "\x1b[2 q\x1b[?25h", 10);
 }
 
 static void rawon(void)
@@ -237,6 +249,40 @@ static void setstatus(const char *fmt, ...)
 	E.statustime = time(NULL);
 }
 
+static const char *modestr(void)
+{
+	switch (E.mode) {
+	case mnormal:
+		return "NORMAL";
+	case minsert:
+		return "INSERT";
+	case mcmd:
+		return "CMD";
+	}
+	return "?";
+}
+
+static int ndigits(int n)
+{
+	int d;
+
+	if (n < 0)
+		n = -n;
+	d = 1;
+	while (n >= 10) {
+		n /= 10;
+		d++;
+	}
+	return d;
+}
+
+static int numw(void)
+{
+	if (!E.shownum)
+		return 0;
+	return ndigits(linecount()) + 1; /* digits + space */
+}
+
 static bool isutfcont(unsigned char c)
 {
 	return (c & 0xc0) == 0x80;
@@ -308,9 +354,63 @@ static int off2row(size_t off)
 static int off2col(size_t off)
 {
 	size_t ls;
+	size_t i;
+	int col;
 
 	ls = linestart(off);
-	return (int)(off - ls);
+	col = 0;
+	i = ls;
+	while (i < off && i < E.buf.len && E.buf.s[i] != '\n') {
+		unsigned char c;
+		size_t j;
+
+		c = (unsigned char)E.buf.s[i];
+		if (c == '\t') {
+			col += tabstop - (col % tabstop);
+			i++;
+			continue;
+		}
+		j = utfnext(E.buf.s, E.buf.len, i);
+		if (j <= i)
+			j = i + 1;
+		col++;
+		i = j;
+	}
+	return col;
+}
+
+static size_t offatcol(size_t ls, size_t le, int want)
+{
+	size_t i;
+	int col;
+
+	if (want <= 0)
+		return ls;
+	col = 0;
+	i = ls;
+	while (i < le && i < E.buf.len && E.buf.s[i] != '\n') {
+		unsigned char c;
+		size_t j;
+		int n;
+
+		if (col >= want)
+			break;
+		c = (unsigned char)E.buf.s[i];
+		if (c == '\t') {
+			n = tabstop - (col % tabstop);
+			if (col + n > want)
+				break;
+			col += n;
+			i++;
+			continue;
+		}
+		j = utfnext(E.buf.s, E.buf.len, i);
+		if (j <= i)
+			j = i + 1;
+		col++;
+		i = j;
+	}
+	return i;
 }
 
 static size_t row2off(int row)
@@ -342,9 +442,14 @@ static void clampcur(void)
 static void scroll(void)
 {
 	int cy, cx;
+	int w, textcols;
 
 	cy = off2row(E.cur);
 	cx = off2col(E.cur);
+	w = numw();
+	textcols = E.screencols - w;
+	if (textcols < 1)
+		textcols = 1;
 
 	if (cy < E.rowoff)
 		E.rowoff = cy;
@@ -353,8 +458,8 @@ static void scroll(void)
 
 	if (cx < E.coloff)
 		E.coloff = cx;
-	if (cx >= E.coloff + E.screencols)
-		E.coloff = cx - E.screencols + 1;
+	if (cx >= E.coloff + textcols)
+		E.coloff = cx - textcols + 1;
 
 	if (E.rowoff < 0)
 		E.rowoff = 0;
@@ -366,28 +471,81 @@ static void drawrows(struct sbuf *ab)
 {
 	int y;
 	size_t off;
+	int w, digits;
+	int lineno;
+	int lcount;
+	int curline;
 
 	off = row2off(E.rowoff);
+	w = numw();
+	digits = w ? (w - 1) : 0;
+	lcount = linecount();
+	curline = off2row(E.cur) + 1;
 	for (y = 0; y < E.textrows; y++) {
 		size_t ls, le;
-		int len;
+		int cols;
+		int col;
+		size_t i;
 
 		ls = off;
-		if (ls > E.buf.len) {
-			const char *t = "~";
-			sbufins(ab, ab->len, t, 1);
+		lineno = E.rowoff + y + 1;
+		cols = E.screencols - w;
+		if (cols < 1)
+			cols = 1;
+		if (lineno > lcount || ls >= E.buf.len) {
+			if (w) {
+				int n;
+				sbufins(ab, ab->len, "~", 1);
+				n = w - 1;
+				while (n-- > 0)
+					sbufins(ab, ab->len, " ", 1);
+			} else {
+				sbufins(ab, ab->len, "~", 1);
+			}
 		} else {
 			le = lineend(ls);
-			len = (int)(le - ls);
-			if (E.coloff < len) {
+			if (w) {
+				char nb[32];
 				int n;
-				const char *p;
+				int shown;
 
-				p = E.buf.s + ls + E.coloff;
-				n = len - E.coloff;
-				if (n > E.screencols)
-					n = E.screencols;
-				sbufins(ab, ab->len, p, (size_t)n);
+				shown = lineno;
+				if (E.shownumrel && lineno != curline)
+					shown = lineno > curline ? (lineno - curline) : (curline - lineno);
+				n = snprintf(nb, sizeof(nb), "%*d ", digits, shown);
+				if (n > 0)
+					sbufins(ab, ab->len, nb, (size_t)n);
+			}
+			col = 0;
+			i = ls;
+			while (i < le && i < E.buf.len && E.buf.s[i] != '\n') {
+				unsigned char c;
+				size_t j;
+				int k;
+				int n;
+
+				if (col >= E.coloff + cols)
+					break;
+				c = (unsigned char)E.buf.s[i];
+				if (c == '\t') {
+					n = tabstop - (col % tabstop);
+					for (k = 0; k < n; k++) {
+						if (col >= E.coloff && col < E.coloff + cols)
+							sbufins(ab, ab->len, " ", 1);
+						col++;
+						if (col >= E.coloff + cols)
+							break;
+					}
+					i++;
+					continue;
+				}
+				j = utfnext(E.buf.s, E.buf.len, i);
+				if (j <= i)
+					j = i + 1;
+				if (col >= E.coloff && col < E.coloff + cols)
+					sbufins(ab, ab->len, E.buf.s + i, j - i);
+				col++;
+				i = j;
 			}
 			off = (le < E.buf.len && E.buf.s[le] == '\n') ? le + 1 : le;
 		}
@@ -406,11 +564,11 @@ static void drawstatus(struct sbuf *ab)
 	col = off2col(E.cur) + 1;
 	lcount = linecount();
 
-	snprintf(left, sizeof(left), " %s%s - %d lines %s ",
+	snprintf(left, sizeof(left), " %s%s - %d lines [%s] ",
 		E.filename ? E.filename : "[No Name]",
 		E.dirty ? "*" : "",
 		lcount,
-		E.mode == minsert ? "[INSERT]" : (E.mode == mcmd ? "[CMD]" : ""));
+		modestr());
 	snprintf(right, sizeof(right), " %d,%d ", row, col);
 
 	llen = (int)strlen(left);
@@ -459,8 +617,13 @@ static void refresh(void)
 	struct sbuf ab = {0};
 	char buf[32];
 	int cy, cx;
+	int w;
 
 	scroll();
+	if (E.mode == minsert)
+		sbufins(&ab, ab.len, "\x1b[6 q", 5);
+	else
+		sbufins(&ab, ab.len, "\x1b[2 q", 5);
 
 	sbufins(&ab, ab.len, "\x1b[?25l", 6);
 	sbufins(&ab, ab.len, "\x1b[H", 3);
@@ -470,7 +633,8 @@ static void refresh(void)
 	drawmsg(&ab);
 
 	cy = off2row(E.cur) - E.rowoff + 1;
-	cx = off2col(E.cur) - E.coloff + 1;
+	w = numw();
+	cx = off2col(E.cur) - E.coloff + 1 + w;
 	if (cy < 1)
 		cy = 1;
 	if (cy > E.textrows)
@@ -593,6 +757,19 @@ static bool isword(int c)
 	return isalnum((unsigned char)c) || c == '_';
 }
 
+static int cclass(int c)
+{
+	if (c == 0)
+		return 0;
+	if (c == '\n')
+		return 0;
+	if (isspace((unsigned char)c))
+		return 0;
+	if (isword(c))
+		return 1;
+	return 2;
+}
+
 static size_t motionh(size_t p)
 {
 	return utfprev(E.buf.s, E.buf.len, p);
@@ -628,9 +805,7 @@ static size_t motionj(size_t p)
 	np = row2off(row + 1);
 	ls = np;
 	le = lineend(ls);
-	if ((size_t)col > le - ls)
-		col = (int)(le - ls);
-	return ls + (size_t)col;
+	return offatcol(ls, le, col);
 }
 
 static size_t motionk(size_t p)
@@ -644,9 +819,7 @@ static size_t motionk(size_t p)
 	np = row2off(row - 1);
 	ls = np;
 	le = lineend(ls);
-	if ((size_t)col > le - ls)
-		col = (int)(le - ls);
-	return ls + (size_t)col;
+	return offatcol(ls, le, col);
 }
 
 static size_t motiongg(size_t p)
@@ -661,23 +834,228 @@ static size_t motioncapg(size_t p)
 	return row2off(linecount() - 1);
 }
 
-static size_t motionw(size_t p)
+static size_t motiont(size_t p, int ch, int n)
 {
-	bool inw;
+	size_t scan, ls, le;
+	int k;
 
 	if (p >= E.buf.len)
 		return p;
-	inw = isword((unsigned char)E.buf.s[p]);
-	while (p < E.buf.len && E.buf.s[p] != '\n') {
-		if (inw && !isword((unsigned char)E.buf.s[p]))
+
+	scan = p;
+	ls = linestart(scan);
+	le = lineend(scan);
+	for (k = 0; k < n; k++) {
+		size_t i;
+		size_t start;
+		size_t found;
+
+		ls = linestart(scan);
+		le = lineend(scan);
+
+		start = utfnext(E.buf.s, E.buf.len, scan);
+		if (start > le)
+			return p;
+
+		found = le;
+		for (i = start; i < le; i++) {
+			if ((unsigned char)E.buf.s[i] == (unsigned char)ch) {
+				found = i;
+				break;
+			}
+		}
+		if (found == le)
+			return p;
+
+		scan = found;
+	}
+
+	if (scan <= ls)
+		return ls;
+	return utfprev(E.buf.s, E.buf.len, scan);
+}
+
+static size_t motionw(size_t p)
+{
+	int c, t;
+
+	if (p >= E.buf.len)
+		return p;
+
+	c = (unsigned char)E.buf.s[p];
+	t = cclass(c);
+
+	if (t == 0) {
+		while (p < E.buf.len) {
+			c = (unsigned char)E.buf.s[p];
+			if (cclass(c) != 0)
+				break;
+			p = utfnext(E.buf.s, E.buf.len, p);
+		}
+		return p;
+	}
+
+	while (p < E.buf.len) {
+		c = (unsigned char)E.buf.s[p];
+		if (c == '\n')
 			break;
-		if (!inw && isword((unsigned char)E.buf.s[p]))
+		if (cclass(c) != t)
 			break;
 		p = utfnext(E.buf.s, E.buf.len, p);
 	}
-	while (p < E.buf.len && E.buf.s[p] != '\n' && !isword((unsigned char)E.buf.s[p]))
+	while (p < E.buf.len) {
+		c = (unsigned char)E.buf.s[p];
+		if (cclass(c) != 0)
+			break;
 		p = utfnext(E.buf.s, E.buf.len, p);
+	}
 	return p;
+}
+
+static int pairfor(int c, int *open, int *close)
+{
+	switch (c) {
+	case '(':
+	case ')':
+		*open = '(';
+		*close = ')';
+		return 1;
+	case '[':
+	case ']':
+		*open = '[';
+		*close = ']';
+		return 1;
+	case '{':
+	case '}':
+		*open = '{';
+		*close = '}';
+		return 1;
+	case '<':
+	case '>':
+		*open = '<';
+		*close = '>';
+		return 1;
+	case '\'':
+		*open = '\'';
+		*close = '\'';
+		return 1;
+	case '\"':
+		*open = '\"';
+		*close = '\"';
+		return 1;
+	}
+	return 0;
+}
+
+static int findinnerpair(int open, int close, size_t *a, size_t *b)
+{
+	size_t i, ls, le;
+	ssize_t oi, ci;
+	int depth;
+
+	oi = -1;
+	ci = -1;
+
+	if (E.buf.len == 0)
+		return 0;
+
+	if (open == close) {
+		ls = linestart(E.cur);
+		le = lineend(E.cur);
+		if (E.cur > le)
+			return 0;
+
+		for (i = E.cur; i > ls; ) {
+			i = utfprev(E.buf.s, E.buf.len, i);
+			if ((unsigned char)E.buf.s[i] == (unsigned char)open) {
+				oi = (ssize_t)i;
+				break;
+			}
+		}
+		for (i = E.cur; i < le; ) {
+			if ((unsigned char)E.buf.s[i] == (unsigned char)close) {
+				ci = (ssize_t)i;
+				break;
+			}
+			i = utfnext(E.buf.s, E.buf.len, i);
+		}
+		if (oi < 0 || ci < 0 || (size_t)oi >= (size_t)ci)
+			return 0;
+		*a = (size_t)oi + 1;
+		*b = (size_t)ci;
+		return 1;
+	}
+
+	depth = 0;
+	for (i = E.cur; i > 0; ) {
+		i = utfprev(E.buf.s, E.buf.len, i);
+		if ((unsigned char)E.buf.s[i] == (unsigned char)close) {
+			depth++;
+			continue;
+		}
+		if ((unsigned char)E.buf.s[i] == (unsigned char)open) {
+			if (depth == 0) {
+				oi = (ssize_t)i;
+				break;
+			}
+			depth--;
+		}
+	}
+	if (oi < 0)
+		return 0;
+
+	depth = 0;
+	for (i = (size_t)oi + 1; i < E.buf.len; ) {
+		if ((unsigned char)E.buf.s[i] == (unsigned char)open) {
+			depth++;
+			i = utfnext(E.buf.s, E.buf.len, i);
+			continue;
+		}
+		if ((unsigned char)E.buf.s[i] == (unsigned char)close) {
+			if (depth == 0) {
+				ci = (ssize_t)i;
+				break;
+			}
+			depth--;
+			i = utfnext(E.buf.s, E.buf.len, i);
+			continue;
+		}
+		i = utfnext(E.buf.s, E.buf.len, i);
+	}
+	if (ci < 0)
+		return 0;
+
+	*a = (size_t)oi + 1;
+	*b = (size_t)ci;
+	return 1;
+}
+
+static void applytextobjinner(int ch)
+{
+	int open, close;
+	size_t a, b;
+
+	if (!pairfor(ch, &open, &close)) {
+		setstatus("unknown textobj %c", (char)ch);
+		normreset();
+		return;
+	}
+	if (!findinnerpair(open, close, &a, &b)) {
+		setstatus("no match for %c", (char)ch);
+		normreset();
+		return;
+	}
+
+	if (E.op == 'd' || E.op == 'c') {
+		yankset(a, b, false);
+		bufdelrange(a, b);
+		if (E.op == 'c')
+			E.mode = minsert;
+	} else if (E.op == 'y') {
+		yankset(a, b, false);
+		setstatus("yanked %zu bytes", E.yank.len);
+	}
+	normreset();
 }
 
 static size_t motionb(size_t p)
@@ -778,6 +1156,34 @@ static void delchar(void)
 	bufdelrange(E.cur, utfnext(E.buf.s, E.buf.len, E.cur));
 }
 
+static void openbelow(void)
+{
+	size_t le;
+	size_t at;
+	char nl;
+
+	le = lineend(E.cur);
+	at = (le < E.buf.len && E.buf.s[le] == '\n') ? le + 1 : le;
+	nl = '\n';
+	sbufins(&E.buf, at, &nl, 1);
+	E.dirty = true;
+	E.cur = at;
+	E.mode = minsert;
+}
+
+static void openabove(void)
+{
+	size_t ls;
+	char nl;
+
+	ls = linestart(E.cur);
+	nl = '\n';
+	sbufins(&E.buf, ls, &nl, 1);
+	E.dirty = true;
+	E.cur = ls;
+	E.mode = minsert;
+}
+
 static void backspace(void)
 {
 	size_t p;
@@ -844,6 +1250,10 @@ static void applymotion(int key)
 			end = row2off(E.count - 1);
 		else
 			end = motioncapg(E.cur);
+	} else if (key == 't') {
+		int ch;
+		ch = readkey();
+		end = motiont(end, ch, n);
 	} else {
 		while (n--) {
 			switch (key) {
@@ -873,9 +1283,7 @@ static void applymotion(int key)
 
 	/* op + motion */
 	if (E.op == 'd' || E.op == 'c') {
-		if (key == '$')
-			end = (end < E.buf.len && E.buf.s[end] == '\n') ? end : end;
-		else if (end < E.buf.len)
+		if (key == 'e' && end < E.buf.len)
 			end = utfnext(E.buf.s, E.buf.len, end);
 		linewise = false;
 		yankset(start, end, linewise);
@@ -883,7 +1291,7 @@ static void applymotion(int key)
 		if (E.op == 'c')
 			E.mode = minsert;
 	} else if (E.op == 'y') {
-		if (end < E.buf.len)
+		if (key == 'e' && end < E.buf.len)
 			end = utfnext(E.buf.s, E.buf.len, end);
 		yankset(start, end, linewise);
 		setstatus("yanked %zu bytes", E.yank.len);
@@ -907,13 +1315,43 @@ static void normkey(int key)
 
 	switch (key) {
 	case 'i':
+		if (E.op) {
+			int ch;
+			ch = readkey();
+			applytextobjinner(ch);
+			break;
+		}
 		E.mode = minsert;
+		setstatus("INSERT");
 		normreset();
 		break;
 	case 'a':
 		E.cur = motionl(E.cur);
 		E.mode = minsert;
+		setstatus("INSERT");
 		normreset();
+		break;
+	case 'A':
+		E.cur = lineend(E.cur);
+		E.mode = minsert;
+		setstatus("INSERT");
+		normreset();
+		break;
+	case 'o':
+		openbelow();
+		setstatus("INSERT");
+		normreset();
+		break;
+	case 'O':
+		openabove();
+		setstatus("INSERT");
+		normreset();
+		break;
+	case 'C':
+		E.op = 'c';
+		E.count = 0;
+		applymotion('$');
+		setstatus("INSERT");
 		break;
 	case 'x':
 		n = usecount();
@@ -961,6 +1399,7 @@ static void normkey(int key)
 	case ':':
 		E.mode = mcmd;
 		sbufsetlen(&E.cmd, 0);
+		setstatus("CMD");
 		normreset();
 		break;
 	case kesc:
@@ -973,6 +1412,7 @@ static void normkey(int key)
 	case 'h': case 'j': case 'k': case 'l':
 	case 'w': case 'b': case 'e':
 	case '$':
+	case 't':
 	case 'g':
 	case 'G':
 		applymotion(key);
@@ -994,6 +1434,9 @@ static void inskey(int key)
 	switch (key) {
 	case kesc:
 		E.mode = mnormal;
+		if (E.cur > 0)
+			E.cur = utfprev(E.buf.s, E.buf.len, E.cur);
+		setstatus("NORMAL");
 		break;
 	case kenter:
 		insnl();
@@ -1017,6 +1460,10 @@ static void inskey(int key)
 	case kdown:
 		E.cur = motionj(E.cur);
 		break;
+	case '\t':
+		insbyte('\t');
+		clamp = false;
+		break;
 	default:
 		if (key >= 32 && key <= 255) {
 			insbyte(key);
@@ -1032,6 +1479,35 @@ static void cmdexec(void)
 {
 	if (E.cmd.len == 0) {
 		E.mode = mnormal;
+		setstatus("NORMAL");
+		return;
+	}
+	if (!strcmp(E.cmd.s, "set nu")) {
+		E.shownum = true;
+		E.shownumrel = false;
+		E.mode = mnormal;
+		setstatus("NORMAL");
+		return;
+	}
+	if (!strcmp(E.cmd.s, "set nonu")) {
+		E.shownum = false;
+		E.shownumrel = false;
+		E.mode = mnormal;
+		setstatus("NORMAL");
+		return;
+	}
+	if (!strcmp(E.cmd.s, "set rnu")) {
+		E.shownum = true;
+		E.shownumrel = true;
+		E.mode = mnormal;
+		setstatus("NORMAL");
+		return;
+	}
+	if (!strcmp(E.cmd.s, "set nornu")) {
+		E.shownum = true;
+		E.shownumrel = false;
+		E.mode = mnormal;
+		setstatus("NORMAL");
 		return;
 	}
 	if (!strcmp(E.cmd.s, "q")) {
@@ -1050,6 +1526,7 @@ static void cmdexec(void)
 	if (!strcmp(E.cmd.s, "w")) {
 		filesave();
 		E.mode = mnormal;
+		setstatus("NORMAL");
 		return;
 	}
 	if (!strcmp(E.cmd.s, "wq")) {
@@ -1059,6 +1536,7 @@ static void cmdexec(void)
 			exit(0);
 		}
 		E.mode = mnormal;
+		setstatus("NORMAL");
 		return;
 	}
 
@@ -1071,6 +1549,7 @@ static void cmdkey(int key)
 	switch (key) {
 	case kesc:
 		E.mode = mnormal;
+		setstatus("NORMAL");
 		break;
 	case kenter:
 		cmdexec();
@@ -1127,6 +1606,8 @@ int main(int argc, char **argv)
 	E.count = 0;
 	E.op = 0;
 	E.status[0] = 0;
+	E.shownum = false;
+	E.shownumrel = false;
 	sbufsetlen(&E.buf, 0);
 	sbufsetlen(&E.yank, 0);
 	sbufsetlen(&E.cmd, 0);
@@ -1138,7 +1619,7 @@ int main(int argc, char **argv)
 		fileopen(E.filename);
 	}
 
-	setstatus("NORMAL  :w  :q  i  a  h j k l  w b e  dd yy p  (ctrl-q quits)");
+	setstatus("NORMAL  i a A o O  :w  :q");
 
 	for (;;) {
 		refresh();
