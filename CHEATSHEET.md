@@ -53,6 +53,7 @@ Counts:
 ## editing (NORMAL)
 
 - `x` — delete character under cursor
+- `u` — undo last change
 - `p` — paste yanked/deleted text after cursor
 - `dd` — delete (cut) line
 - `yy` — yank (copy) line

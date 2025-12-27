@@ -27,6 +27,7 @@ make
 - Motions: `h j k l`, `w b e`, `0 $`, `gg`, `G`, `{n}G`, `t{char}`
 - Counts: `{n}{motion}` and `{n}{op}{motion}` where supported
 - Operators: `d`, `y`, `c` with motions; plus `dd`, `yy`, `p`, `x`, `C`
+- Undo: `u`
 - Text objects (inner): `di{char}`, `yi{char}`, `ci{char}` for paired delimiters
 - Ex commands: `:w`, `:q`, `:q!`, `:wq`
 - Options: `:set nu`, `:set nonu`, `:set rnu`, `:set nornu`
