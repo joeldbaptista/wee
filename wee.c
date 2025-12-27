@@ -48,9 +48,19 @@ struct sbuf {
 	size_t cap;
 };
 
+struct undo {
+	int kind; /* 'i' insert, 'd' delete */
+	size_t at;
+	size_t cur;
+	int grp;
+	struct sbuf text;
+};
+
 static struct termios origterm;
 
 static volatile sig_atomic_t winch;
+
+static bool undomute;
 
 static struct {
 	int screenrows;
@@ -79,6 +89,11 @@ static struct {
 	struct sbuf cmd;
 	bool shownum;
 	bool shownumrel;
+
+	struct undo *undo;
+	int undolen;
+	int undocap;
+	int insgrp;
 } E;
 
 static int linecount(void);
@@ -86,11 +101,22 @@ static void normreset(void);
 static void yankset(size_t a, size_t b, bool linewise);
 static void bufdelrange(size_t a, size_t b);
 static void setwinsz(void);
+static void undoclear(void);
+static void undopushins(size_t at, const void *p, size_t n, size_t cur, bool merge);
+static void undopushdel(size_t at, const void *p, size_t n, size_t cur);
+static void undodo(void);
+static void enterinsert(void);
 
 static void onsigwinch(int sig)
 {
 	(void)sig;
 	winch = 1;
+}
+
+static void enterinsert(void)
+{
+	E.mode = minsert;
+	E.insgrp++;
 }
 
 static void die(const char *fmt, ...)
@@ -456,6 +482,106 @@ static void clampcur(void)
 		E.cur = utfprev(E.buf.s, E.buf.len, E.cur);
 }
 
+static void undogrow(int need)
+{
+	int nc;
+	struct undo *nu;
+
+	if (E.undocap >= need)
+		return;
+	nc = E.undocap ? E.undocap : 64;
+	while (nc < need)
+		nc *= 2;
+	nu = realloc(E.undo, (size_t)nc * sizeof(E.undo[0]));
+	if (!nu)
+		die("out of memory");
+	E.undo = nu;
+	E.undocap = nc;
+}
+
+static void undoclear(void)
+{
+	int i;
+	for (i = 0; i < E.undolen; i++)
+		sbuffree(&E.undo[i].text);
+	free(E.undo);
+	E.undo = NULL;
+	E.undolen = 0;
+	E.undocap = 0;
+}
+
+static void undopushins(size_t at, const void *p, size_t n, size_t cur, bool merge)
+{
+	struct undo *u;
+
+	if (undomute || n == 0)
+		return;
+
+	if (merge && E.undolen > 0) {
+		u = &E.undo[E.undolen - 1];
+		if (u->kind == 'i' && u->grp == E.insgrp && u->at + u->text.len == at) {
+			sbufins(&u->text, u->text.len, p, n);
+			return;
+		}
+	}
+
+	undogrow(E.undolen + 1);
+	u = &E.undo[E.undolen++];
+	memset(u, 0, sizeof(*u));
+	u->kind = 'i';
+	u->at = at;
+	u->cur = cur;
+	u->grp = E.insgrp;
+	sbufsetlen(&u->text, 0);
+	sbufins(&u->text, 0, p, n);
+}
+
+static void undopushdel(size_t at, const void *p, size_t n, size_t cur)
+{
+	struct undo *u;
+
+	if (undomute || n == 0)
+		return;
+
+	undogrow(E.undolen + 1);
+	u = &E.undo[E.undolen++];
+	memset(u, 0, sizeof(*u));
+	u->kind = 'd';
+	u->at = at;
+	u->cur = cur;
+	u->grp = 0;
+	sbufsetlen(&u->text, 0);
+	sbufins(&u->text, 0, p, n);
+}
+
+static void undodo(void)
+{
+	struct undo u;
+
+	if (E.undolen == 0) {
+		setstatus("nothing to undo");
+		return;
+	}
+
+	u = E.undo[--E.undolen];
+	undomute = true;
+	if (u.kind == 'i') {
+		if (u.at <= E.buf.len)
+			sbufdel(&E.buf, u.at, u.text.len);
+		E.cur = u.cur;
+	} else if (u.kind == 'd') {
+		if (u.at <= E.buf.len)
+			sbufins(&E.buf, u.at, u.text.s, u.text.len);
+		E.cur = u.cur;
+	}
+	undomute = false;
+
+	E.dirty = true;
+	clampcur();
+	sbuffree(&u.text);
+	setstatus("undone");
+}
+
 static void scroll(void)
 {
 	int cy, cx;
@@ -688,6 +814,7 @@ static void winchtick(void)
 
 static void filenew(void)
 {
+	undoclear();
 	sbufsetlen(&E.buf, 0);
 	E.cur = 0;
 	E.dirty = false;
@@ -722,6 +849,7 @@ static void fileopen(const char *path)
 	E.dirty = false;
 	E.rowoff = 0;
 	E.coloff = 0;
+	undoclear();
 }
 
 static void filesave(void)
@@ -1075,7 +1203,7 @@ static void applytextobjinner(int ch)
 		yankset(a, b, false);
 		bufdelrange(a, b);
 		if (E.op == 'c')
-			E.mode = minsert;
+			enterinsert();
 	} else if (E.op == 'y') {
 		yankset(a, b, false);
 		setstatus("yanked %zu bytes", E.yank.len);
@@ -1135,6 +1263,9 @@ static void yankset(size_t a, size_t b, bool linewise)
 
 static void bufdelrange(size_t a, size_t b)
 {
+	size_t cur;
+	size_t n;
+
 	if (b < a) {
 		size_t t = a;
 		a = b;
@@ -1147,7 +1278,12 @@ static void bufdelrange(size_t a, size_t b)
 	if (b == a)
 		return;
 
-	sbufdel(&E.buf, a, b - a);
+	cur = E.cur;
+	n = b - a;
+	if (a < E.buf.len)
+		undopushdel(a, E.buf.s + a, n, cur);
+
+	sbufdel(&E.buf, a, n);
 	E.dirty = true;
 	E.cur = a;
 	clampcur();
@@ -1156,6 +1292,7 @@ static void bufdelrange(size_t a, size_t b)
 static void pasteafter(void)
 {
 	size_t at;
+	size_t cur;
 
 	if (!E.yank.len)
 		return;
@@ -1168,6 +1305,8 @@ static void pasteafter(void)
 		at = (E.cur < E.buf.len) ? utfnext(E.buf.s, E.buf.len, E.cur) : E.cur;
 	}
 
+	cur = E.cur;
+	undopushins(at, E.yank.s, E.yank.len, cur, false);
 	sbufins(&E.buf, at, E.yank.s, E.yank.len);
 	E.dirty = true;
 	E.cur = at;
@@ -1186,27 +1325,33 @@ static void openbelow(void)
 	size_t le;
 	size_t at;
 	char nl;
+	size_t cur;
 
 	le = lineend(E.cur);
 	at = (le < E.buf.len && E.buf.s[le] == '\n') ? le + 1 : le;
 	nl = '\n';
+	cur = E.cur;
+	undopushins(at, &nl, 1, cur, false);
 	sbufins(&E.buf, at, &nl, 1);
 	E.dirty = true;
 	E.cur = at;
-	E.mode = minsert;
+	enterinsert();
 }
 
 static void openabove(void)
 {
 	size_t ls;
 	char nl;
+	size_t cur;
 
 	ls = linestart(E.cur);
 	nl = '\n';
+	cur = E.cur;
+	undopushins(ls, &nl, 1, cur, false);
 	sbufins(&E.buf, ls, &nl, 1);
 	E.dirty = true;
 	E.cur = ls;
-	E.mode = minsert;
+	enterinsert();
 }
 
 static void backspace(void)
@@ -1221,8 +1366,11 @@ static void backspace(void)
 static void insbyte(int c)
 {
 	char ch;
+	size_t cur;
 
 	ch = (char)c;
+	cur = E.cur;
+	undopushins(E.cur, &ch, 1, cur, true);
 	sbufins(&E.buf, E.cur, &ch, 1);
 	E.cur++;
 	E.dirty = true;
@@ -1231,8 +1379,11 @@ static void insbyte(int c)
 static void insnl(void)
 {
 	char c;
+	size_t cur;
 
 	c = '\n';
+	cur = E.cur;
+	undopushins(E.cur, &c, 1, cur, true);
 	sbufins(&E.buf, E.cur, &c, 1);
 	E.cur++;
 	E.dirty = true;
@@ -1314,7 +1465,7 @@ static void applymotion(int key)
 		yankset(start, end, linewise);
 		bufdelrange(start, end);
 		if (E.op == 'c')
-			E.mode = minsert;
+			enterinsert();
 	} else if (E.op == 'y') {
 		if (key == 'e' && end < E.buf.len)
 			end = utfnext(E.buf.s, E.buf.len, end);
@@ -1346,19 +1497,19 @@ static void normkey(int key)
 			applytextobjinner(ch);
 			break;
 		}
-		E.mode = minsert;
+		enterinsert();
 		setstatus("INSERT");
 		normreset();
 		break;
 	case 'a':
 		E.cur = motionl(E.cur);
-		E.mode = minsert;
+		enterinsert();
 		setstatus("INSERT");
 		normreset();
 		break;
 	case 'A':
 		E.cur = lineend(E.cur);
-		E.mode = minsert;
+		enterinsert();
 		setstatus("INSERT");
 		normreset();
 		break;
@@ -1382,6 +1533,10 @@ static void normkey(int key)
 		n = usecount();
 		while (n--)
 			delchar();
+		normreset();
+		break;
+	case 'u':
+		undodo();
 		normreset();
 		break;
 	case 'p':
@@ -1642,6 +1797,10 @@ int main(int argc, char **argv)
 	E.status[0] = 0;
 	E.shownum = false;
 	E.shownumrel = false;
+	E.undo = NULL;
+	E.undolen = 0;
+	E.undocap = 0;
+	E.insgrp = 0;
 	sbufsetlen(&E.buf, 0);
 	sbufsetlen(&E.yank, 0);
 	sbufsetlen(&E.cmd, 0);
