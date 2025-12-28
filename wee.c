@@ -1452,6 +1452,55 @@ static void bufinsert(size_t at, const void *p, size_t n)
 	E.dirty = true;
 }
 
+/*
+ * parse a (vi-ish) search/substitute pattern.
+ * supports:
+ *   - backslash escaping (\x -> x)
+ *   - ^ at start of pattern (beginning-of-line)
+ *   - $ at end of pattern (end-of-line)
+ */
+static void parsepat(const char *s, size_t slen, struct sbuf *out, int *a0, int *a1)
+{
+	size_t i;
+	int esc;
+	bool lastesc;
+
+	sbufsetlen(out, 0);
+	if (a0)
+		*a0 = 0;
+	if (a1)
+		*a1 = 0;
+
+	esc = 0;
+	lastesc = false;
+	for (i = 0; i < slen; i++) {
+		char c;
+
+		c = s[i];
+		if (!esc && c == '\\' && i + 1 < slen) {
+			esc = 1;
+			continue;
+		}
+		if (esc) {
+			lastesc = true;
+			esc = 0;
+		} else {
+			lastesc = false;
+		}
+
+		if (out->len == 0 && a0 && !lastesc && c == '^') {
+			*a0 = 1;
+			continue;
+		}
+		sbufins(out, out->len, &c, 1);
+	}
+
+	if (a1 && out->len && out->s[out->len - 1] == '$' && !lastesc) {
+		*a1 = 1;
+		sbufsetlen(out, out->len - 1);
+	}
+}
+
 static int runstdout(const char *cmd, struct sbuf *out, int *ws)
 {
 	int pfd[2];
@@ -1642,6 +1691,86 @@ next:
 	return 0;
 }
 
+static int findanchnextrange(const char *pat, size_t plen, int a0, int a1, size_t start, size_t rs, size_t re, size_t *pos)
+{
+	size_t ls, le;
+
+	if (rs > E.buf.len)
+		rs = E.buf.len;
+	if (re > E.buf.len)
+		re = E.buf.len;
+	if (re < rs) {
+		size_t t = rs;
+		rs = re;
+		re = t;
+	}
+	if (start < rs)
+		start = rs;
+	if (start > re)
+		return 0;
+
+	ls = linestart(start);
+	if (start != ls) {
+		le = lineend(start);
+		ls = (le < E.buf.len && E.buf.s[le] == '\n') ? le + 1 : E.buf.len;
+	}
+
+	for (;;) {
+		size_t cand;
+
+		if (ls > re)
+			break;
+		le = lineend(ls);
+		cand = ls;
+		if (!a0 && a1) {
+			if (le < plen)
+				goto next;
+			cand = le - plen;
+		}
+		if (cand < start)
+			goto next;
+		if (cand < rs || cand + plen > re)
+			goto next;
+		if (plen == 0) {
+			if (a0 && a1) {
+				if (ls == le && ls >= rs && ls <= re) {
+					*pos = ls;
+					return 1;
+				}
+			} else if (a0) {
+				if (ls >= rs && ls <= re) {
+					*pos = ls;
+					return 1;
+				}
+			} else if (a1) {
+				if (le >= rs && le <= re) {
+					*pos = le;
+					return 1;
+				}
+			}
+			goto next;
+		}
+		if (cand + plen > le)
+			goto next;
+		if (a0 && cand != ls)
+			goto next;
+		if (a1 && cand + plen != le)
+			goto next;
+		if (memcmp(E.buf.s + cand, pat, plen) == 0) {
+			*pos = cand;
+			return 1;
+		}
+
+next:
+		if (le < E.buf.len && E.buf.s[le] == '\n') {
+			ls = le + 1;
+			continue;
+		}
+		break;
+	}
+	return 0;
+}
+
 static int findanchprev(const char *pat, size_t plen, int a0, int a1, size_t before, size_t *pos)
 {
 	size_t ls, le;
@@ -1703,8 +1832,7 @@ static void searchdo(int dir)
 {
 	size_t pos;
 	size_t start;
-	const char *pat;
-	size_t plen;
+	struct sbuf pat = {0};
 	int a0, a1;
 
 	if (E.cmdpre == '/') {
@@ -1719,37 +1847,28 @@ static void searchdo(int dir)
 		return;
 	}
 
-	pat = E.search.s;
-	plen = E.search.len;
-	a0 = 0;
-	a1 = 0;
-	if (plen && pat[0] == '^') {
-		a0 = 1;
-		pat++;
-		plen--;
-	}
-	if (plen && pat[plen - 1] == '$') {
-		a1 = 1;
-		plen--;
-	}
+	parsepat(E.search.s, E.search.len, &pat, &a0, &a1);
 
 	if (dir >= 0) {
 		start = (E.cur < E.buf.len) ? utfnext(E.buf.s, E.buf.len, E.cur) : E.cur;
-		if ((a0 || a1) ? !findanchnext(pat, plen, a0, a1, start, &pos)
-		              : !findnext(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
+		if ((a0 || a1) ? !findanchnext(pat.s, pat.len, a0, a1, start, &pos)
+		              : !findnext(E.buf.s, E.buf.len, pat.s, pat.len, start, &pos)) {
 			setstatus("pattern not found");
+			sbuffree(&pat);
 			return;
 		}
 	} else {
 		start = E.cur;
 		if (start > 0)
 			start = utfprev(E.buf.s, E.buf.len, start);
-		if ((a0 || a1) ? !findanchprev(pat, plen, a0, a1, start, &pos)
-		              : !findprev(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
+		if ((a0 || a1) ? !findanchprev(pat.s, pat.len, a0, a1, start, &pos)
+		              : !findprev(E.buf.s, E.buf.len, pat.s, pat.len, start, &pos)) {
 			setstatus("pattern not found");
+			sbuffree(&pat);
 			return;
 		}
 	}
+	sbuffree(&pat);
 
 	E.cur = pos;
 	clampcur();
@@ -1760,6 +1879,7 @@ static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 {
 	int all;
 	int global;
+	int a0, a1;
 	char delim;
 	size_t i;
 	struct sbuf pat = {0};
@@ -1767,6 +1887,8 @@ static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 
 	all = 0;
 	global = 0;
+	a0 = 0;
+	a1 = 0;
 	if (cmd[0] == '%' && cmd[1] == 's') {
 		all = 1;
 		cmd += 2;
@@ -1783,17 +1905,40 @@ static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 		return;
 	}
 
-	for (i = 0; cmd[i]; i++) {
-		char c;
-		c = cmd[i];
-		if (c == '\\' && cmd[i + 1]) {
-			i++;
-			sbufins(&pat, pat.len, &cmd[i], 1);
-			continue;
+	{
+		int esc;
+		bool lastesc;
+		esc = 0;
+		lastesc = false;
+		for (i = 0; cmd[i]; i++) {
+			char c;
+			c = cmd[i];
+			if (!esc && c == '\\' && cmd[i + 1]) {
+				esc = 1;
+				continue;
+			}
+			if (!esc && c == delim)
+				break;
+			if (esc) {
+				lastesc = true;
+				esc = 0;
+			} else {
+				lastesc = false;
+			}
+			if (pat.len == 0 && !lastesc && c == '^') {
+				a0 = 1;
+				continue;
+			}
+			sbufins(&pat, pat.len, &c, 1);
 		}
-		if (c == delim)
-			break;
-		sbufins(&pat, pat.len, &c, 1);
+		if (cmd[i] != delim) {
+			setstatus("bad substitute");
+			goto out;
+		}
+		if (pat.len && pat.s[pat.len - 1] == '$' && !lastesc) {
+			a1 = 1;
+			sbufsetlen(&pat, pat.len - 1);
+		}
 	}
 	if (cmd[i] != delim) {
 		setstatus("bad substitute");
@@ -1820,7 +1965,7 @@ static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 			global = 1;
 	}
 
-	if (pat.len == 0) {
+	if (pat.len == 0 && !(a0 || a1)) {
 		setstatus("empty pattern");
 		goto out;
 	}
@@ -1855,7 +2000,8 @@ static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 		pos = rs;
 		while (pos <= re) {
 			size_t m;
-			if (!findnext(E.buf.s, re, pat.s, pat.len, pos, &m))
+			if ((a0 || a1) ? !findanchnextrange(pat.s, pat.len, a0, a1, pos, rs, re, &m)
+			              : !findnext(E.buf.s, re, pat.s, pat.len, pos, &m))
 				break;
 			if (m + pat.len > re)
 				break;

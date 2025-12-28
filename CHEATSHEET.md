@@ -55,7 +55,7 @@ Search:
 - `n` — repeat search forward
 - `N` — repeat search backward
 
-Anchors (search only):
+Anchors (search + substitute):
 
 - `^` at the start of `{pattern}` matches the beginning of a line
 - `$` at the end of `{pattern}` matches the end of a line
