@@ -2185,19 +2185,6 @@ static void cmdexec(void)
 		setstatus(E.mode == mvisual ? "VISUAL" : "NORMAL");
 		return;
 	}
-	if (E.cmd.s[0] == 's' || (E.cmd.s[0] == '%' && E.cmd.s[1] == 's')) {
-		if (E.prevmode == mvisual) {
-			size_t a, b;
-			if (visrange(&a, &b))
-				subcmd(E.cmd.s, a, b, 1);
-			visoff();
-			E.mode = mnormal;
-		} else {
-			subcmd(E.cmd.s, 0, 0, 0);
-			E.mode = mnormal;
-		}
-		return;
-	}
 	if (!strcmp(E.cmd.s, "set nu")) {
 		E.shownum = true;
 		E.shownumrel = false;
@@ -2224,6 +2211,19 @@ static void cmdexec(void)
 		E.shownumrel = false;
 		E.mode = mnormal;
 		setstatus("NORMAL");
+		return;
+	}
+	if (E.cmd.s[0] == 's' || (E.cmd.s[0] == '%' && E.cmd.s[1] == 's')) {
+		if (E.prevmode == mvisual) {
+			size_t a, b;
+			if (visrange(&a, &b))
+				subcmd(E.cmd.s, a, b, 1);
+			visoff();
+			E.mode = mnormal;
+		} else {
+			subcmd(E.cmd.s, 0, 0, 0);
+			E.mode = mnormal;
+		}
 		return;
 	}
 	if (!strcmp(E.cmd.s, "q")) {
