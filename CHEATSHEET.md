@@ -142,6 +142,10 @@ Options:
 - `:set rnu` — show relative line numbers
 - `:set nornu` — disable relative line numbers
 
+External:
+
+- `:run <script>` — run `<script>` and insert its stdout into the buffer after the cursor
+
 ## emergency
 
 - `Ctrl-Q` — quit immediately

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -139,6 +140,7 @@ static int findprev(const char *s, size_t slen, const char *pat, size_t plen, si
 static void searchdo(int dir);
 static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange);
 static void bufinsert(size_t at, const void *p, size_t n);
+static int runstdout(const char *cmd, struct sbuf *out, int *ws);
 static void vison(void);
 static void visoff(void);
 static int visrange(size_t *a, size_t *b);
@@ -1450,6 +1452,74 @@ static void bufinsert(size_t at, const void *p, size_t n)
 	E.dirty = true;
 }
 
+static int runstdout(const char *cmd, struct sbuf *out, int *ws)
+{
+	int pfd[2];
+	pid_t pid;
+	int st;
+	char buf[4096];
+	ssize_t n;
+	int in, err;
+
+	if (ws)
+		*ws = 0;
+	sbufsetlen(out, 0);
+
+	if (pipe(pfd) == -1)
+		return -1;
+
+	pid = fork();
+	if (pid == -1) {
+		close(pfd[0]);
+		close(pfd[1]);
+		return -1;
+	}
+
+	if (pid == 0) {
+		in = open("/dev/null", O_RDONLY);
+		if (in >= 0) {
+			dup2(in, STDIN_FILENO);
+			close(in);
+		}
+		dup2(pfd[1], STDOUT_FILENO);
+		close(pfd[0]);
+		close(pfd[1]);
+
+		err = open("/dev/null", O_WRONLY);
+		if (err >= 0) {
+			dup2(err, STDERR_FILENO);
+			close(err);
+		}
+
+		execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+		_exit(127);
+	}
+
+	close(pfd[1]);
+	for (;;) {
+		n = read(pfd[0], buf, sizeof(buf));
+		if (n > 0) {
+			sbufins(out, out->len, buf, (size_t)n);
+			continue;
+		}
+		if (n == 0)
+			break;
+		if (errno == EINTR)
+			continue;
+		close(pfd[0]);
+		(void)waitpid(pid, NULL, 0);
+		return -1;
+	}
+	close(pfd[0]);
+
+	st = 0;
+	if (waitpid(pid, &st, 0) == -1)
+		return -1;
+	if (ws)
+		*ws = st;
+	return 0;
+}
+
 static int findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos)
 {
 	size_t i;
@@ -2122,7 +2192,7 @@ static void inskey(int key)
 	switch (key) {
 	case kesc:
 		E.mode = mnormal;
-		if (E.cur > 0)
+		if (E.cur > 0 && E.buf.s[E.cur - 1] != '\n')
 			E.cur = utfprev(E.buf.s, E.buf.len, E.cur);
 		setstatus("NORMAL");
 		break;
@@ -2224,6 +2294,44 @@ static void cmdexec(void)
 			subcmd(E.cmd.s, 0, 0, 0);
 			E.mode = mnormal;
 		}
+		return;
+	}
+	if (!strncmp(E.cmd.s, "run", 3) && (E.cmd.s[3] == 0 || isspace((unsigned char)E.cmd.s[3]))) {
+		const char *p;
+		struct sbuf out = {0};
+		size_t at;
+		size_t nbytes;
+		int st;
+
+		p = E.cmd.s + 3;
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (*p == 0) {
+			setstatus("usage: :run <script>");
+			E.mode = E.prevmode;
+			return;
+		}
+		if (runstdout(p, &out, &st) == -1) {
+			setstatus("run failed");
+			E.mode = E.prevmode;
+			sbuffree(&out);
+			return;
+		}
+		if (out.len == 0) {
+			setstatus("run: no output");
+			E.mode = E.prevmode;
+			sbuffree(&out);
+			return;
+		}
+
+		at = (E.cur < E.buf.len) ? utfnext(E.buf.s, E.buf.len, E.cur) : E.cur;
+		bufinsert(at, out.s, out.len);
+		nbytes = out.len;
+		sbuffree(&out);
+		if (E.prevmode == mvisual)
+			visoff();
+		E.mode = mnormal;
+		setstatus("run: %zu bytes", nbytes);
 		return;
 	}
 	if (!strcmp(E.cmd.s, "q")) {

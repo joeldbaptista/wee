@@ -31,6 +31,7 @@ make
 - Undo: `u`
 - Text objects (inner): `di{char}`, `yi{char}`, `ci{char}` for paired delimiters
 - Ex commands: `:w`, `:q`, `:q!`, `:wq`
+- Ex commands: `:run <script>` (insert stdout after cursor)
 - Search: `/{pattern}` with `n`/`N`
 - Search: `/{pattern}` with `n`/`N` (works in VISUAL too)
 - Substitute: `:s/old/new/` and `:%s/old/new/g` (literal text; in VISUAL applies to selection)
