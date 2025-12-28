@@ -2242,6 +2242,18 @@ static void applymotion(int key)
 			case 'l': end = motionl(end); break;
 			case 'j': end = motionj(end); break;
 			case 'k': end = motionk(end); break;
+			case ')': {
+				int k;
+				for (k = 0; k < E.textrows; k++)
+					end = motionj(end);
+				break;
+			}
+			case '(':{
+				int k;
+				for (k = 0; k < E.textrows; k++)
+					end = motionk(end);
+				break;
+			}
 			case '0': end = motionbol(end); break;
 			case '$': end = motioneol(end); break;
 			case 'w': end = motionw(end); break;
@@ -2424,6 +2436,7 @@ static void normkey(int key)
 	case kup: applymotion('k'); break;
 	case kdown: applymotion('j'); break;
 	case 'h': case 'j': case 'k': case 'l':
+	case '(': case ')':
 	case 'w': case 'b': case 'e':
 	case '$':
 	case 't':

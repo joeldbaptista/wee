@@ -26,6 +26,8 @@ Mode switching:
 Character / line:
 
 - `h` / `j` / `k` / `l` — left/down/up/right
+- `)` — next page (one screenful down)
+- `(` — previous page (one screenful up)
 
 Words:
 
