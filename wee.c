@@ -1453,11 +1453,13 @@ static void bufinsert(size_t at, const void *p, size_t n)
 }
 
 /*
- * parse a (vi-ish) search/substitute pattern.
- * supports:
- *   - backslash escaping (\x -> x)
- *   - ^ at start of pattern (beginning-of-line)
- *   - $ at end of pattern (end-of-line)
+ * parsepat parses a vi-ish pattern into a literal byte string plus anchors.
+ * parameters:
+ *   - s/slen: raw pattern bytes as typed
+ *   - out: destination buffer (is overwritten)
+ *   - a0: set to 1 if pattern begins with unescaped '^' (bol)
+ *   - a1: set to 1 if pattern ends with unescaped '$' (eol)
+ * returns: nothing (results are written to out/a0/a1)
  */
 static void parsepat(const char *s, size_t slen, struct sbuf *out, int *a0, int *a1)
 {
@@ -1501,6 +1503,14 @@ static void parsepat(const char *s, size_t slen, struct sbuf *out, int *a0, int 
 	}
 }
 
+/*
+ * runstdout runs cmd via a shell and captures its stdout.
+ * parameters:
+ *   - cmd: shell command string
+ *   - out: destination buffer for stdout (is overwritten)
+ *   - ws: optional wait status (may be NULL)
+ * returns: 0 on success, -1 on failure
+ */
 static int runstdout(const char *cmd, struct sbuf *out, int *ws)
 {
 	int pfd[2];
@@ -1617,6 +1627,12 @@ static int findprev(const char *s, size_t slen, const char *pat, size_t plen, si
 	return 1;
 }
 
+/*
+ * prevlinestart returns the start offset of the previous line.
+ * parameters:
+ *   - ls: current line start offset (0..E.buf.len)
+ * returns: byte offset of previous line start, or 0
+ */
 static size_t prevlinestart(size_t ls)
 {
 	size_t i;
@@ -1629,6 +1645,15 @@ static size_t prevlinestart(size_t ls)
 	return i;
 }
 
+/*
+ * findanchnext searches forward for an anchored match.
+ * parameters:
+ *   - pat/plen: literal pattern bytes (already unescaped)
+ *   - a0/a1: begin/end-of-line anchors (0/1)
+ *   - start: search start offset
+ *   - pos: receives match start offset
+ * returns: 1 if found, 0 if not found
+ */
 static int findanchnext(const char *pat, size_t plen, int a0, int a1, size_t start, size_t *pos)
 {
 	size_t ls, le;
@@ -1694,6 +1719,16 @@ next:
 	return 0;
 }
 
+/*
+ * findanchnextrange searches forward for an anchored match within [rs,re].
+ * parameters:
+ *   - pat/plen: literal pattern bytes (already unescaped)
+ *   - a0/a1: begin/end-of-line anchors (0/1)
+ *   - start: search start offset (clamped to [rs,re])
+ *   - rs/re: inclusive range endpoints (byte offsets)
+ *   - pos: receives match start offset
+ * returns: 1 if found, 0 if not found
+ */
 static int findanchnextrange(const char *pat, size_t plen, int a0, int a1, size_t start, size_t rs, size_t re, size_t *pos)
 {
 	size_t ls, le;
@@ -1777,6 +1812,15 @@ next:
 	return 0;
 }
 
+/*
+ * findanchprev searches backward for an anchored match.
+ * parameters:
+ *   - pat/plen: literal pattern bytes (already unescaped)
+ *   - a0/a1: begin/end-of-line anchors (0/1)
+ *   - before: search up to this offset (inclusive-ish; see implementation)
+ *   - pos: receives match start offset
+ * returns: 1 if found, 0 if not found
+ */
 static int findanchprev(const char *pat, size_t plen, int a0, int a1, size_t before, size_t *pos)
 {
 	size_t ls, le;
