@@ -1568,10 +1568,144 @@ static int findprev(const char *s, size_t slen, const char *pat, size_t plen, si
 	return 1;
 }
 
+static size_t prevlinestart(size_t ls)
+{
+	size_t i;
+
+	if (ls == 0)
+		return 0;
+	i = ls - 1;
+	while (i > 0 && E.buf.s[i - 1] != '\n')
+		i--;
+	return i;
+}
+
+static int findanchnext(const char *pat, size_t plen, int a0, int a1, size_t start, size_t *pos)
+{
+	size_t ls, le;
+
+	if (start > E.buf.len)
+		return 0;
+	ls = linestart(start);
+	if (start != ls) {
+		le = lineend(start);
+		ls = (le < E.buf.len && E.buf.s[le] == '\n') ? le + 1 : E.buf.len;
+	}
+
+	for (;;) {
+		size_t cand;
+
+		if (ls > E.buf.len)
+			break;
+		le = lineend(ls);
+		cand = ls;
+		if (!a0 && a1) {
+			if (le < plen)
+				goto next;
+			cand = le - plen;
+		}
+		if (cand < start)
+			goto next;
+		if (plen == 0) {
+			if (a0 && a1) {
+				if (ls == le) {
+					*pos = ls;
+					return 1;
+				}
+			} else if (a0) {
+				*pos = ls;
+				return 1;
+			} else if (a1) {
+				*pos = le;
+				return 1;
+			}
+			goto next;
+		}
+		if (cand + plen > le)
+			goto next;
+		if (a0 && cand != ls)
+			goto next;
+		if (a1 && cand + plen != le)
+			goto next;
+		if (memcmp(E.buf.s + cand, pat, plen) == 0) {
+			*pos = cand;
+			return 1;
+		}
+
+next:
+		if (le < E.buf.len && E.buf.s[le] == '\n') {
+			ls = le + 1;
+			continue;
+		}
+		break;
+	}
+	return 0;
+}
+
+static int findanchprev(const char *pat, size_t plen, int a0, int a1, size_t before, size_t *pos)
+{
+	size_t ls, le;
+	size_t cand;
+
+	if (before > E.buf.len)
+		before = E.buf.len;
+	ls = linestart(before);
+
+	for (;;) {
+		le = lineend(ls);
+		cand = ls;
+		if (!a0 && a1) {
+			if (le < plen)
+				goto prev;
+			cand = le - plen;
+		}
+		if (plen == 0) {
+			if (a0 && a1) {
+				if (ls == le && ls <= before) {
+					*pos = ls;
+					return 1;
+				}
+			} else if (a0) {
+				if (ls <= before) {
+					*pos = ls;
+					return 1;
+				}
+			} else if (a1) {
+				if (le <= before) {
+					*pos = le;
+					return 1;
+				}
+			}
+			goto prev;
+		}
+		if (cand + plen > le)
+			goto prev;
+		if (a0 && cand != ls)
+			goto prev;
+		if (a1 && cand + plen != le)
+			goto prev;
+		if (cand + plen > before)
+			goto prev;
+		if (memcmp(E.buf.s + cand, pat, plen) == 0) {
+			*pos = cand;
+			return 1;
+		}
+
+prev:
+		if (ls == 0)
+			break;
+		ls = prevlinestart(ls);
+	}
+	return 0;
+}
+
 static void searchdo(int dir)
 {
 	size_t pos;
 	size_t start;
+	const char *pat;
+	size_t plen;
+	int a0, a1;
 
 	if (E.cmdpre == '/') {
 		if (E.cmd.len) {
@@ -1585,9 +1719,24 @@ static void searchdo(int dir)
 		return;
 	}
 
+	pat = E.search.s;
+	plen = E.search.len;
+	a0 = 0;
+	a1 = 0;
+	if (plen && pat[0] == '^') {
+		a0 = 1;
+		pat++;
+		plen--;
+	}
+	if (plen && pat[plen - 1] == '$') {
+		a1 = 1;
+		plen--;
+	}
+
 	if (dir >= 0) {
 		start = (E.cur < E.buf.len) ? utfnext(E.buf.s, E.buf.len, E.cur) : E.cur;
-		if (!findnext(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
+		if ((a0 || a1) ? !findanchnext(pat, plen, a0, a1, start, &pos)
+		              : !findnext(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
 			setstatus("pattern not found");
 			return;
 		}
@@ -1595,7 +1744,8 @@ static void searchdo(int dir)
 		start = E.cur;
 		if (start > 0)
 			start = utfprev(E.buf.s, E.buf.len, start);
-		if (!findprev(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
+		if ((a0 || a1) ? !findanchprev(pat, plen, a0, a1, start, &pos)
+		              : !findprev(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
 			setstatus("pattern not found");
 			return;
 		}

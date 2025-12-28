@@ -55,6 +55,11 @@ Search:
 - `n` — repeat search forward
 - `N` — repeat search backward
 
+Anchors (search only):
+
+- `^` at the start of `{pattern}` matches the beginning of a line
+- `$` at the end of `{pattern}` matches the end of a line
+
 In VISUAL mode, search moves the cursor and extends the selection.
 
 Counts:
