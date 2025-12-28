@@ -115,7 +115,14 @@ static struct {
 	bool shownum;
 	bool shownumrel;
 
-	/* line index cache for E.buf: start offset of each line (0-based row). */
+	/*
+	 * linest is a cached index of line start offsets in E.buf.
+	 * it trades one full scan when the buffer is dirty for cheap row/line lookups:
+	 *   - linecount() is O(1)
+	 *   - row2off() is O(1)
+	 *   - off2row() is O(log n)
+	 * any edit to E.buf marks it dirty; we rebuild lazily on demand.
+	 */
 	size_t *linest;
 	int linelen;
 	int linecap;
