@@ -115,6 +115,12 @@ static struct {
 	bool shownum;
 	bool shownumrel;
 
+	/* line index cache for E.buf: start offset of each line (0-based row). */
+	size_t *linest;
+	int linelen;
+	int linecap;
+	bool linedirty;
+
 	struct undo *undo;
 	int undolen;
 	int undocap;
@@ -134,6 +140,9 @@ static void enterinsert(void);
 static void pasteafter(void);
 
 static int parsesubex(const char *cmd, const char **sub, int *r0, int *r1);
+
+static void linesdirty(void);
+static void linesensure(void);
 
 static size_t utfprev(const char *s, size_t len, size_t i);
 static size_t utfnext(const char *s, size_t len, size_t i);
@@ -202,6 +211,8 @@ sbufsetlen(struct sbuf *b, size_t n)
 	sbufgrow(b, n + 1);
 	b->len = n;
 	b->s[b->len] = 0;
+	if (b == &E.buf)
+		linesdirty();
 }
 
 static void
@@ -211,6 +222,8 @@ sbuffree(struct sbuf *b)
 	b->s = NULL;
 	b->len = 0;
 	b->cap = 0;
+	if (b == &E.buf)
+		linesdirty();
 }
 
 static void
@@ -223,6 +236,8 @@ sbufins(struct sbuf *b, size_t at, const void *p, size_t n)
 	memcpy(b->s + at, p, n);
 	b->len += n;
 	b->s[b->len] = 0;
+	if (b == &E.buf)
+		linesdirty();
 }
 
 static void
@@ -235,6 +250,61 @@ sbufdel(struct sbuf *b, size_t at, size_t n)
 	memmove(b->s + at, b->s + at + n, b->len - (at + n));
 	b->len -= n;
 	b->s[b->len] = 0;
+	if (b == &E.buf)
+		linesdirty();
+}
+
+/* mark the line-start cache dirty after any edit to E.buf. */
+static void
+linesdirty(void)
+{
+	E.linedirty = true;
+}
+
+static void
+linesgrow(int need)
+{
+	int nc;
+	size_t *ns;
+
+	if (E.linecap >= need)
+		return;
+	nc = E.linecap ? E.linecap : 128;
+	while (nc < need)
+		nc *= 2;
+
+	ns = realloc(E.linest, (size_t)nc * sizeof(E.linest[0]));
+	if (!ns)
+		die("out of memory");
+	E.linest = ns;
+	E.linecap = nc;
+}
+
+/* build the line-start table for the whole buffer (used by ex and drawing). */
+static void
+linesbuild(void)
+{
+	size_t i;
+	int n;
+
+	linesgrow(1);
+	E.linest[0] = 0;
+	n = 1;
+	for (i = 0; i < E.buf.len; i++) {
+		if (E.buf.s[i] == '\n') {
+			linesgrow(n + 1);
+			E.linest[n++] = i + 1;
+		}
+	}
+	E.linelen = n;
+	E.linedirty = false;
+}
+
+static void
+linesensure(void)
+{
+	if (E.linelen == 0 || E.linedirty)
+		linesbuild();
 }
 
 static int
@@ -480,29 +550,32 @@ lineend(size_t at)
 static int
 linecount(void)
 {
-	int n;
-	size_t i;
-
-	if (E.buf.len == 0)
-		return 1;
-	n = 1;
-	for (i = 0; i < E.buf.len; i++)
-		if (E.buf.s[i] == '\n')
-			n++;
-	return n;
+	linesensure();
+	return E.linelen;
 }
 
 static int
 off2row(size_t off)
 {
-	int r;
-	size_t i;
+	size_t lo, hi;
 
-	r = 0;
-	for (i = 0; i < off && i < E.buf.len; i++)
-		if (E.buf.s[i] == '\n')
-			r++;
-	return r;
+	linesensure();
+	if (off > E.buf.len)
+		off = E.buf.len;
+	if (E.linelen <= 1)
+		return 0;
+
+	lo = 0;
+	hi = (size_t)E.linelen;
+	while (lo + 1 < hi) {
+		size_t mid;
+		mid = (lo + hi) / 2;
+		if (E.linest[mid] <= off)
+			lo = mid;
+		else
+			hi = mid;
+	}
+	return (int)lo;
 }
 
 static int
@@ -572,20 +645,12 @@ offatcol(size_t ls, size_t le, int want)
 static size_t
 row2off(int row)
 {
-	int r;
-	size_t i;
-
+	linesensure();
 	if (row <= 0)
 		return 0;
-	r = 0;
-	for (i = 0; i < E.buf.len; i++) {
-		if (E.buf.s[i] == '\n') {
-			r++;
-			if (r == row)
-				return i + 1;
-		}
-	}
-	return E.buf.len;
+	if (row >= E.linelen)
+		return E.buf.len;
+	return E.linest[row];
 }
 
 static void
