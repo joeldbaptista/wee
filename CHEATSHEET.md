@@ -135,12 +135,34 @@ Files:
 
 Substitute (literal text, not regex):
 
-- `:s/old/new/` — substitute first match on the current line
-- `:s/old/new/g` — substitute all matches on the current line
-- `:%s/old/new/` — substitute first match on every line
-- `:%s/old/new/g` — substitute all matches in the whole file
+Syntax:
 
-In VISUAL mode, `:s/.../.../` and `:%s/.../.../g` operate on the selection range.
+- `:[address]s/old_text/new_text/` (optional trailing `g` flag)
+
+Address components:
+
+- `.` — current line
+- `n` — line number `n`
+- `.+m` / `.-m` — current line plus/minus `m` lines
+- `$` — last line
+- `/string/` — a line that contains `string`
+- `%` — entire file
+- `[addr1],[addr2]` — a range
+
+Semantics:
+
+- Without `g`: replace the **first** occurrence on **each** addressed line
+- With `g`: replace **all** occurrences on **each** addressed line
+
+Examples:
+
+- `:.,.+10s/Banana/Kumquat` — first occurrence per line for 11 lines starting at `.`
+- `:%s/apple/pear/g` — all occurrences per line for the whole file
+- `:%s/.$//` — delete the last character of every line
+
+VISUAL mode:
+
+- In VISUAL mode, `:s/old/new/` uses the selected **line range** if you don't provide an explicit address.
 
 Options:
 
