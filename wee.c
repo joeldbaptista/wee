@@ -121,45 +121,71 @@ static struct {
 	int insgrp;
 } E;
 
-static int linecount(void);
-static void normreset(void);
-static void yankset(size_t a, size_t b, bool linewise);
-static void bufdelrange(size_t a, size_t b);
-static void setwinsz(void);
-static void undoclear(void);
-static void undopushins(size_t at, const void *p, size_t n, size_t cur, bool merge);
-static void undopushdel(size_t at, const void *p, size_t n, size_t cur);
-static void undodo(void);
-static void enterinsert(void);
+static int
+linecount(void);
+static void
+normreset(void);
+static void
+yankset(size_t a, size_t b, bool linewise);
+static void
+bufdelrange(size_t a, size_t b);
+static void
+setwinsz(void);
+static void
+undoclear(void);
+static void
+undopushins(size_t at, const void *p, size_t n, size_t cur, bool merge);
+static void
+undopushdel(size_t at, const void *p, size_t n, size_t cur);
+static void
+undodo(void);
+static void
+enterinsert(void);
 
-static size_t utfprev(const char *s, size_t len, size_t i);
-static size_t utfnext(const char *s, size_t len, size_t i);
+static size_t
+utfprev(const char *s, size_t len, size_t i);
+static size_t
+utfnext(const char *s, size_t len, size_t i);
 
-static int findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos);
-static int findprev(const char *s, size_t slen, const char *pat, size_t plen, size_t before, size_t *pos);
-static void searchdo(int dir);
-static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange);
-static void bufinsert(size_t at, const void *p, size_t n);
-static int runstdout(const char *cmd, struct sbuf *out, int *ws);
-static void vison(void);
-static void visoff(void);
-static int visrange(size_t *a, size_t *b);
-static int viswant(void);
-static void viskey(int key);
+static int
+findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos);
+static int
+findprev(const char *s, size_t slen, const char *pat, size_t plen, size_t before, size_t *pos);
+static void
+searchdo(int dir);
+static void
+subcmd(const char *cmd, size_t rs, size_t re, int hasrange);
+static void
+bufinsert(size_t at, const void *p, size_t n);
+static int
+runstdout(const char *cmd, struct sbuf *out, int *ws);
+static void
+vison(void);
+static void
+visoff(void);
+static int
+visrange(size_t *a, size_t *b);
+static int
+viswant(void);
+static void
+viskey(int key);
 
-static void onsigwinch(int sig)
+static void
+onsigwinch(int sig)
 {
 	(void)sig;
 	winch = 1;
 }
 
-static void enterinsert(void)
+static void
+enterinsert(void)
 {
 	E.mode = minsert;
 	E.insgrp++;
 }
 
-static void die(const char *fmt, ...)
+static void
+die(const char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
@@ -170,7 +196,8 @@ static void die(const char *fmt, ...)
 	exit(1);
 }
 
-static void sbufgrow(struct sbuf *b, size_t need)
+static void
+sbufgrow(struct sbuf *b, size_t need)
 {
 	size_t nc;
 	char *ns;
@@ -189,14 +216,16 @@ static void sbufgrow(struct sbuf *b, size_t need)
 	b->cap = nc;
 }
 
-static void sbufsetlen(struct sbuf *b, size_t n)
+static void
+sbufsetlen(struct sbuf *b, size_t n)
 {
 	sbufgrow(b, n + 1);
 	b->len = n;
 	b->s[b->len] = 0;
 }
 
-static void sbuffree(struct sbuf *b)
+static void
+sbuffree(struct sbuf *b)
 {
 	free(b->s);
 	b->s = NULL;
@@ -204,7 +233,8 @@ static void sbuffree(struct sbuf *b)
 	b->cap = 0;
 }
 
-static void sbufins(struct sbuf *b, size_t at, const void *p, size_t n)
+static void
+sbufins(struct sbuf *b, size_t at, const void *p, size_t n)
 {
 	if (at > b->len)
 		at = b->len;
@@ -215,7 +245,8 @@ static void sbufins(struct sbuf *b, size_t at, const void *p, size_t n)
 	b->s[b->len] = 0;
 }
 
-static void sbufdel(struct sbuf *b, size_t at, size_t n)
+static void
+sbufdel(struct sbuf *b, size_t at, size_t n)
 {
 	if (at >= b->len)
 		return;
@@ -226,7 +257,8 @@ static void sbufdel(struct sbuf *b, size_t at, size_t n)
 	b->s[b->len] = 0;
 }
 
-static int getwinsz(int *rows, int *cols)
+static int
+getwinsz(int *rows, int *cols)
 {
 	struct winsize ws;
 
@@ -237,13 +269,15 @@ static int getwinsz(int *rows, int *cols)
 	return 0;
 }
 
-static void rawoff(void)
+static void
+rawoff(void)
 {
 	tcsetattr(STDIN_FILENO, TCSAFLUSH, &origterm);
 	write(STDOUT_FILENO, "\x1b[2 q\x1b[?25h", 10);
 }
 
-static void rawon(void)
+static void
+rawon(void)
 {
 	struct termios t;
 
@@ -267,7 +301,8 @@ static void rawon(void)
  * read one keypress.
  * returns knull on timeout or resize so the main loop can redraw.
  */
-static int readkey(void)
+static int
+readkey(void)
 {
 	char c;
 	ssize_t n;
@@ -327,7 +362,8 @@ static int readkey(void)
 	return (unsigned char)c;
 }
 
-static void setstatus(const char *fmt, ...)
+static void
+setstatus(const char *fmt, ...)
 {
 	va_list ap;
 	va_start(ap, fmt);
@@ -336,7 +372,8 @@ static void setstatus(const char *fmt, ...)
 	E.statustime = time(NULL);
 }
 
-static const char *modestr(void)
+static const char *
+modestr(void)
 {
 	switch (E.mode) {
 	case mnormal:
@@ -351,23 +388,27 @@ static const char *modestr(void)
 	return "?";
 }
 
-static void vison(void)
+static void
+vison(void)
 {
 	E.vmark = E.cur;
 	E.mode = mvisual;
 }
 
-static void visoff(void)
+static void
+visoff(void)
 {
 	E.mode = mnormal;
 }
 
-static int viswant(void)
+static int
+viswant(void)
 {
 	return E.mode == mvisual || (E.mode == mcmd && E.prevmode == mvisual);
 }
 
-static int visrange(size_t *a, size_t *b)
+static int
+visrange(size_t *a, size_t *b)
 {
 	size_t lo, hi;
 
@@ -386,7 +427,8 @@ static int visrange(size_t *a, size_t *b)
 	return 1;
 }
 
-static int ndigits(int n)
+static int
+ndigits(int n)
 {
 	int d;
 
@@ -400,19 +442,22 @@ static int ndigits(int n)
 	return d;
 }
 
-static int numw(void)
+static int
+numw(void)
 {
 	if (!E.shownum)
 		return 0;
 	return ndigits(linecount()) + 1; /* digits + space */
 }
 
-static bool isutfcont(unsigned char c)
+static bool
+isutfcont(unsigned char c)
 {
 	return (c & 0xc0) == 0x80;
 }
 
-static size_t utfprev(const char *s, size_t len, size_t i)
+static size_t
+utfprev(const char *s, size_t len, size_t i)
 {
 	(void)len;
 	if (i == 0)
@@ -423,7 +468,8 @@ static size_t utfprev(const char *s, size_t len, size_t i)
 	return i;
 }
 
-static size_t utfnext(const char *s, size_t len, size_t i)
+static size_t
+utfnext(const char *s, size_t len, size_t i)
 {
 	size_t j;
 
@@ -435,21 +481,24 @@ static size_t utfnext(const char *s, size_t len, size_t i)
 	return j;
 }
 
-static size_t linestart(size_t at)
+static size_t
+linestart(size_t at)
 {
 	while (at > 0 && E.buf.s[at - 1] != '\n')
 		at--;
 	return at;
 }
 
-static size_t lineend(size_t at)
+static size_t
+lineend(size_t at)
 {
 	while (at < E.buf.len && E.buf.s[at] != '\n')
 		at++;
 	return at;
 }
 
-static int linecount(void)
+static int
+linecount(void)
 {
 	int n;
 	size_t i;
@@ -463,7 +512,8 @@ static int linecount(void)
 	return n;
 }
 
-static int off2row(size_t off)
+static int
+off2row(size_t off)
 {
 	int r;
 	size_t i;
@@ -475,7 +525,8 @@ static int off2row(size_t off)
 	return r;
 }
 
-static int off2col(size_t off)
+static int
+off2col(size_t off)
 {
 	size_t ls;
 	size_t i;
@@ -503,7 +554,8 @@ static int off2col(size_t off)
 	return col;
 }
 
-static size_t offatcol(size_t ls, size_t le, int want)
+static size_t
+offatcol(size_t ls, size_t le, int want)
 {
 	size_t i;
 	int col;
@@ -537,7 +589,8 @@ static size_t offatcol(size_t ls, size_t le, int want)
 	return i;
 }
 
-static size_t row2off(int row)
+static size_t
+row2off(int row)
 {
 	int r;
 	size_t i;
@@ -555,7 +608,8 @@ static size_t row2off(int row)
 	return E.buf.len;
 }
 
-static void clampcur(void)
+static void
+clampcur(void)
 {
 	if (E.cur > E.buf.len)
 		E.cur = E.buf.len;
@@ -564,7 +618,8 @@ static void clampcur(void)
 }
 
 /* undo stack storage; grows as needed. */
-static void undogrow(int need)
+static void
+undogrow(int need)
 {
 	int nc;
 	struct undo *nu;
@@ -581,7 +636,8 @@ static void undogrow(int need)
 	E.undocap = nc;
 }
 
-static void undoclear(void)
+static void
+undoclear(void)
 {
 	int i;
 	for (i = 0; i < E.undolen; i++)
@@ -592,7 +648,8 @@ static void undoclear(void)
 	E.undocap = 0;
 }
 
-static void undopushins(size_t at, const void *p, size_t n, size_t cur, bool merge)
+static void
+undopushins(size_t at, const void *p, size_t n, size_t cur, bool merge)
 {
 	struct undo *u;
 
@@ -618,7 +675,8 @@ static void undopushins(size_t at, const void *p, size_t n, size_t cur, bool mer
 	sbufins(&u->text, 0, p, n);
 }
 
-static void undopushdel(size_t at, const void *p, size_t n, size_t cur)
+static void
+undopushdel(size_t at, const void *p, size_t n, size_t cur)
 {
 	struct undo *u;
 
@@ -636,7 +694,8 @@ static void undopushdel(size_t at, const void *p, size_t n, size_t cur)
 	sbufins(&u->text, 0, p, n);
 }
 
-static void undodo(void)
+static void
+undodo(void)
 {
 	struct undo u;
 
@@ -671,7 +730,8 @@ static void undodo(void)
  * refresh() redraws the full screen each keypress.
  */
 
-static void scroll(void)
+static void
+scroll(void)
 {
 	int cy, cx;
 	int w, textcols;
@@ -699,7 +759,8 @@ static void scroll(void)
 		E.coloff = 0;
 }
 
-static void drawrows(struct sbuf *ab)
+static void
+drawrows(struct sbuf *ab)
 {
 	int y;
 	size_t off;
@@ -802,7 +863,8 @@ static void drawrows(struct sbuf *ab)
 	}
 }
 
-static void drawstatus(struct sbuf *ab)
+static void
+drawstatus(struct sbuf *ab)
 {
 	char left[128], right[128];
 	int llen, rlen;
@@ -839,7 +901,8 @@ static void drawstatus(struct sbuf *ab)
 	sbufins(ab, ab->len, "\r\n", 2);
 }
 
-static void drawmsg(struct sbuf *ab)
+static void
+drawmsg(struct sbuf *ab)
 {
 	if (E.mode == mcmd) {
 		char p;
@@ -862,7 +925,8 @@ static void drawmsg(struct sbuf *ab)
 	sbufins(ab, ab->len, "\x1b[K", 3);
 }
 
-static void refresh(void)
+static void
+refresh(void)
 {
 	struct sbuf ab = {0};
 	char buf[32];
@@ -902,7 +966,8 @@ static void refresh(void)
 	sbuffree(&ab);
 }
 
-static void setwinsz(void)
+static void
+setwinsz(void)
 {
 	if (getwinsz(&E.screenrows, &E.screencols) == -1)
 		die("getwinsz");
@@ -911,7 +976,8 @@ static void setwinsz(void)
 		E.textrows = 1;
 }
 
-static void winchtick(void)
+static void
+winchtick(void)
 {
 	/* handle resize at a safe point (outside the signal handler). */
 	if (!winch)
@@ -920,7 +986,8 @@ static void winchtick(void)
 	setwinsz();
 }
 
-static void filenew(void)
+static void
+filenew(void)
 {
 	undoclear();
 	sbufsetlen(&E.buf, 0);
@@ -930,7 +997,8 @@ static void filenew(void)
 	E.coloff = 0;
 }
 
-static void fileopen(const char *path)
+static void
+fileopen(const char *path)
 {
 	int fd;
 	struct stat st;
@@ -960,7 +1028,8 @@ static void fileopen(const char *path)
 	undoclear();
 }
 
-static void filesave(void)
+static void
+filesave(void)
 {
 	int fd;
 	ssize_t n;
@@ -1018,12 +1087,14 @@ static void filesave(void)
  * mutators that change E.buf should record undo via undopush*.
  */
 
-static bool isword(int c)
+static bool
+isword(int c)
 {
 	return isalnum((unsigned char)c) || c == '_';
 }
 
-static int cclass(int c)
+static int
+cclass(int c)
 {
 	if (c == 0)
 		return 0;
@@ -1036,22 +1107,26 @@ static int cclass(int c)
 	return 2;
 }
 
-static size_t motionh(size_t p)
+static size_t
+motionh(size_t p)
 {
 	return utfprev(E.buf.s, E.buf.len, p);
 }
 
-static size_t motionl(size_t p)
+static size_t
+motionl(size_t p)
 {
 	return utfnext(E.buf.s, E.buf.len, p);
 }
 
-static size_t motionbol(size_t p)
+static size_t
+motionbol(size_t p)
 {
 	return linestart(p);
 }
 
-static size_t motioneol(size_t p)
+static size_t
+motioneol(size_t p)
 {
 	size_t le;
 	le = lineend(p);
@@ -1060,7 +1135,8 @@ static size_t motioneol(size_t p)
 	return le;
 }
 
-static size_t motionj(size_t p)
+static size_t
+motionj(size_t p)
 {
 	int row, col;
 	size_t np;
@@ -1074,7 +1150,8 @@ static size_t motionj(size_t p)
 	return offatcol(ls, le, col);
 }
 
-static size_t motionk(size_t p)
+static size_t
+motionk(size_t p)
 {
 	int row, col;
 	size_t np;
@@ -1088,19 +1165,22 @@ static size_t motionk(size_t p)
 	return offatcol(ls, le, col);
 }
 
-static size_t motiongg(size_t p)
+static size_t
+motiongg(size_t p)
 {
 	(void)p;
 	return 0;
 }
 
-static size_t motioncapg(size_t p)
+static size_t
+motioncapg(size_t p)
 {
 	(void)p;
 	return row2off(linecount() - 1);
 }
 
-static size_t motiont(size_t p, int ch, int n)
+static size_t
+motiont(size_t p, int ch, int n)
 {
 	size_t scan, ls, le;
 	int k;
@@ -1141,7 +1221,8 @@ static size_t motiont(size_t p, int ch, int n)
 	return utfprev(E.buf.s, E.buf.len, scan);
 }
 
-static size_t motionf(size_t p, int ch, int n)
+static size_t
+motionf(size_t p, int ch, int n)
 {
 	size_t scan, le;
 	int k;
@@ -1176,7 +1257,8 @@ static size_t motionf(size_t p, int ch, int n)
 	return scan;
 }
 
-static size_t motionw(size_t p)
+static size_t
+motionw(size_t p)
 {
 	int c, t;
 
@@ -1213,7 +1295,8 @@ static size_t motionw(size_t p)
 	return p;
 }
 
-static int pairfor(int c, int *open, int *close)
+static int
+pairfor(int c, int *open, int *close)
 {
 	switch (c) {
 	case '(':
@@ -1248,7 +1331,8 @@ static int pairfor(int c, int *open, int *close)
 	return 0;
 }
 
-static int findinnerpair(int open, int close, size_t *a, size_t *b)
+static int
+findinnerpair(int open, int close, size_t *a, size_t *b)
 {
 	size_t i, ls, le;
 	ssize_t oi, ci;
@@ -1331,7 +1415,8 @@ static int findinnerpair(int open, int close, size_t *a, size_t *b)
 	return 1;
 }
 
-static void applytextobjinner(int ch)
+static void
+applytextobjinner(int ch)
 {
 	int open, close;
 	size_t a, b;
@@ -1359,7 +1444,8 @@ static void applytextobjinner(int ch)
 	normreset();
 }
 
-static size_t motionb(size_t p)
+static size_t
+motionb(size_t p)
 {
 	if (p == 0)
 		return 0;
@@ -1376,7 +1462,8 @@ static size_t motionb(size_t p)
 	return p;
 }
 
-static size_t motione(size_t p)
+static size_t
+motione(size_t p)
 {
 	if (p >= E.buf.len)
 		return p;
@@ -1388,7 +1475,8 @@ static size_t motione(size_t p)
 	return utfprev(E.buf.s, E.buf.len, p);
 }
 
-static void yankset(size_t a, size_t b, bool linewise)
+static void
+yankset(size_t a, size_t b, bool linewise)
 {
 	size_t n;
 
@@ -1409,7 +1497,8 @@ static void yankset(size_t a, size_t b, bool linewise)
 	E.yankline = linewise;
 }
 
-static void bufdelrange(size_t a, size_t b)
+static void
+bufdelrange(size_t a, size_t b)
 {
 	size_t cur;
 	size_t n;
@@ -1438,7 +1527,8 @@ static void bufdelrange(size_t a, size_t b)
 	clampcur();
 }
 
-static void bufinsert(size_t at, const void *p, size_t n)
+static void
+bufinsert(size_t at, const void *p, size_t n)
 {
 	size_t cur;
 
@@ -1461,7 +1551,8 @@ static void bufinsert(size_t at, const void *p, size_t n)
  *   - a1: set to 1 if pattern ends with unescaped '$' (eol)
  * returns: nothing (results are written to out/a0/a1)
  */
-static void parsepat(const char *s, size_t slen, struct sbuf *out, int *a0, int *a1)
+static void
+parsepat(const char *s, size_t slen, struct sbuf *out, int *a0, int *a1)
 {
 	size_t i;
 	int esc;
@@ -1511,7 +1602,8 @@ static void parsepat(const char *s, size_t slen, struct sbuf *out, int *a0, int 
  *   - ws: optional wait status (may be NULL)
  * returns: 0 on success, -1 on failure
  */
-static int runstdout(const char *cmd, struct sbuf *out, int *ws)
+static int
+runstdout(const char *cmd, struct sbuf *out, int *ws)
 {
 	int pfd[2];
 	pid_t pid;
@@ -1580,7 +1672,8 @@ static int runstdout(const char *cmd, struct sbuf *out, int *ws)
 	return 0;
 }
 
-static int findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos)
+static int
+findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos)
 {
 	size_t i;
 
@@ -1600,7 +1693,8 @@ static int findnext(const char *s, size_t slen, const char *pat, size_t plen, si
 	return 0;
 }
 
-static int findprev(const char *s, size_t slen, const char *pat, size_t plen, size_t before, size_t *pos)
+static int
+findprev(const char *s, size_t slen, const char *pat, size_t plen, size_t before, size_t *pos)
 {
 	size_t i;
 	size_t last;
@@ -1633,7 +1727,8 @@ static int findprev(const char *s, size_t slen, const char *pat, size_t plen, si
  *   - ls: current line start offset (0..E.buf.len)
  * returns: byte offset of previous line start, or 0
  */
-static size_t prevlinestart(size_t ls)
+static size_t
+prevlinestart(size_t ls)
 {
 	size_t i;
 
@@ -1654,7 +1749,8 @@ static size_t prevlinestart(size_t ls)
  *   - pos: receives match start offset
  * returns: 1 if found, 0 if not found
  */
-static int findanchnext(const char *pat, size_t plen, int a0, int a1, size_t start, size_t *pos)
+static int
+findanchnext(const char *pat, size_t plen, int a0, int a1, size_t start, size_t *pos)
 {
 	size_t ls, le;
 
@@ -1729,7 +1825,8 @@ next:
  *   - pos: receives match start offset
  * returns: 1 if found, 0 if not found
  */
-static int findanchnextrange(const char *pat, size_t plen, int a0, int a1, size_t start, size_t rs, size_t re, size_t *pos)
+static int
+findanchnextrange(const char *pat, size_t plen, int a0, int a1, size_t start, size_t rs, size_t re, size_t *pos)
 {
 	size_t ls, le;
 
@@ -1821,7 +1918,8 @@ next:
  *   - pos: receives match start offset
  * returns: 1 if found, 0 if not found
  */
-static int findanchprev(const char *pat, size_t plen, int a0, int a1, size_t before, size_t *pos)
+static int
+findanchprev(const char *pat, size_t plen, int a0, int a1, size_t before, size_t *pos)
 {
 	size_t ls, le;
 	size_t cand;
@@ -1878,7 +1976,8 @@ prev:
 	return 0;
 }
 
-static void searchdo(int dir)
+static void
+searchdo(int dir)
 {
 	size_t pos;
 	size_t start;
@@ -1925,7 +2024,8 @@ static void searchdo(int dir)
 	setstatus("match");
 }
 
-static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
+static void
+subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 {
 	int all;
 	int global;
@@ -2080,7 +2180,8 @@ out:
 	sbuffree(&rep);
 }
 
-static void pasteafter(void)
+static void
+pasteafter(void)
 {
 	size_t at;
 	size_t cur;
@@ -2104,14 +2205,16 @@ static void pasteafter(void)
 	clampcur();
 }
 
-static void delchar(void)
+static void
+delchar(void)
 {
 	if (E.cur >= E.buf.len)
 		return;
 	bufdelrange(E.cur, utfnext(E.buf.s, E.buf.len, E.cur));
 }
 
-static void openbelow(void)
+static void
+openbelow(void)
 {
 	size_t le;
 	size_t at;
@@ -2129,7 +2232,8 @@ static void openbelow(void)
 	enterinsert();
 }
 
-static void openabove(void)
+static void
+openabove(void)
 {
 	size_t ls;
 	char nl;
@@ -2145,7 +2249,8 @@ static void openabove(void)
 	enterinsert();
 }
 
-static void backspace(void)
+static void
+backspace(void)
 {
 	size_t p;
 	if (E.cur == 0)
@@ -2154,7 +2259,8 @@ static void backspace(void)
 	bufdelrange(p, E.cur);
 }
 
-static void insbyte(int c)
+static void
+insbyte(int c)
 {
 	char ch;
 	size_t cur;
@@ -2167,7 +2273,8 @@ static void insbyte(int c)
 	E.dirty = true;
 }
 
-static void insnl(void)
+static void
+insnl(void)
 {
 	char c;
 	size_t cur;
@@ -2180,13 +2287,15 @@ static void insnl(void)
 	E.dirty = true;
 }
 
-static void normreset(void)
+static void
+normreset(void)
 {
 	E.count = 0;
 	E.op = 0;
 }
 
-static int usecount(void)
+static int
+usecount(void)
 {
 	return E.count ? E.count : 1;
 }
@@ -2196,7 +2305,8 @@ static int usecount(void)
  * applymotion() resolves a motion (with count), then applies any pending op.
  */
 
-static void applymotion(int key)
+static void
+applymotion(int key)
 {
 	int n;
 	size_t start, end;
@@ -2299,7 +2409,8 @@ static void applymotion(int key)
 
 /* parse one key in NORMAL mode (counts, operators, motions, and commands). */
 
-static void normkey(int key)
+static void
+normkey(int key)
 {
 	int n;
 
@@ -2454,7 +2565,8 @@ static void normkey(int key)
 	}
 }
 
-static void viskey(int key)
+static void
+viskey(int key)
 {
 	size_t a, b;
 
@@ -2544,7 +2656,8 @@ static void viskey(int key)
 	}
 }
 
-static void inskey(int key)
+static void
+inskey(int key)
 {
 	bool clamp;
 
@@ -2598,7 +2711,8 @@ static void inskey(int key)
  * cmdkey() edits E.cmd; cmdexec() runs a tiny set of ex commands.
  */
 
-static void cmdexec(void)
+static void
+cmdexec(void)
 {
 	if (E.cmdpre == '/') {
 		searchdo(+1);
@@ -2728,7 +2842,8 @@ static void cmdexec(void)
 	E.mode = E.prevmode;
 }
 
-static void cmdkey(int key)
+static void
+cmdkey(int key)
 {
 	switch (key) {
 	case kesc:
@@ -2750,7 +2865,8 @@ static void cmdkey(int key)
 	}
 }
 
-static void processkey(void)
+static void
+processkey(void)
 {
 	int key;
 
@@ -2779,7 +2895,8 @@ static void processkey(void)
 	}
 }
 
-int main(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
 	struct sigaction sa;
 
