@@ -45,6 +45,7 @@ File / line jumps:
 Find on line:
 
 - `t{char}` — move to *before* the next `{char}` on the current line
+- `f{char}` — move to the next `{char}` on the current line
 
 Counts:
 
@@ -72,8 +73,11 @@ Examples:
 - `d0`, `d$`
 - `dgg`, `dG`, `d10G`
 - `dt{char}` — delete until *before* `{char}` (same target as `t{char}`)
+- `df{char}` — delete through `{char}`
 - `yt{char}` — yank until *before* `{char}`
+- `yf{char}` — yank through `{char}`
 - `ct{char}` — change until *before* `{char}`
+- `cf{char}` — change through `{char}`
 
 Notes:
 

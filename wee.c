@@ -1065,6 +1065,41 @@ static size_t motiont(size_t p, int ch, int n)
 	return utfprev(E.buf.s, E.buf.len, scan);
 }
 
+static size_t motionf(size_t p, int ch, int n)
+{
+	size_t scan, le;
+	int k;
+
+	if (p >= E.buf.len)
+		return p;
+
+	scan = p;
+	le = lineend(scan);
+	for (k = 0; k < n; k++) {
+		size_t i;
+		size_t start;
+		size_t found;
+
+		le = lineend(scan);
+		start = utfnext(E.buf.s, E.buf.len, scan);
+		if (start > le)
+			return p;
+
+		found = le;
+		for (i = start; i < le; i++) {
+			if ((unsigned char)E.buf.s[i] == (unsigned char)ch) {
+				found = i;
+				break;
+			}
+		}
+		if (found == le)
+			return p;
+		scan = found;
+	}
+
+	return scan;
+}
+
 static size_t motionw(size_t p)
 {
 	int c, t;
@@ -1473,6 +1508,15 @@ static void applymotion(int key)
 		int ch;
 		ch = readkey();
 		end = motiont(end, ch, n);
+	} else if (key == 'f') {
+		int ch;
+		ch = readkey();
+		if (ch == kesc || ch == knull) {
+			setstatus("find cancelled");
+			normreset();
+			return;
+		}
+		end = motionf(end, ch, n);
 	} else {
 		while (n--) {
 			switch (key) {
@@ -1504,6 +1548,8 @@ static void applymotion(int key)
 	if (E.op == 'd' || E.op == 'c') {
 		if (key == 'e' && end < E.buf.len)
 			end = utfnext(E.buf.s, E.buf.len, end);
+		if (key == 'f' && end < E.buf.len)
+			end = utfnext(E.buf.s, E.buf.len, end);
 		linewise = false;
 		yankset(start, end, linewise);
 		bufdelrange(start, end);
@@ -1511,6 +1557,8 @@ static void applymotion(int key)
 			enterinsert();
 	} else if (E.op == 'y') {
 		if (key == 'e' && end < E.buf.len)
+			end = utfnext(E.buf.s, E.buf.len, end);
+		if (key == 'f' && end < E.buf.len)
 			end = utfnext(E.buf.s, E.buf.len, end);
 		yankset(start, end, linewise);
 		setstatus("yanked %zu bytes", E.yank.len);
@@ -1638,6 +1686,7 @@ static void normkey(int key)
 	case 'w': case 'b': case 'e':
 	case '$':
 	case 't':
+	case 'f':
 	case 'g':
 	case 'G':
 		applymotion(key);

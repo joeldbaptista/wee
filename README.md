@@ -24,7 +24,7 @@ make
 
 - Modes: NORMAL / INSERT / CMD
 - Raw terminal UI with status line
-- Motions: `h j k l`, `w b e`, `0 $`, `gg`, `G`, `{n}G`, `t{char}`
+- Motions: `h j k l`, `w b e`, `0 $`, `gg`, `G`, `{n}G`, `t{char}`, `f{char}`
 - Counts: `{n}{motion}` and `{n}{op}{motion}` where supported
 - Operators: `d`, `y`, `c` with motions; plus `dd`, `yy`, `p`, `x`, `C`
 - Undo: `u`
