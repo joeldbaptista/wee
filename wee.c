@@ -607,6 +607,12 @@ static void undodo(void)
 	setstatus("undone");
 }
 
+/*
+ * rendering pipeline.
+ * scroll() maintains rowoff/coloff so E.cur stays visible.
+ * refresh() redraws the full screen each keypress.
+ */
+
 static void scroll(void)
 {
 	int cy, cx;
@@ -831,6 +837,7 @@ static void setwinsz(void)
 
 static void winchtick(void)
 {
+	/* handle resize at a safe point (outside the signal handler). */
 	if (!winch)
 		return;
 	winch = 0;
@@ -929,6 +936,11 @@ static void filesave(void)
 	E.dirty = false;
 	setstatus("%zu bytes written", E.buf.len);
 }
+
+/*
+ * edit primitives.
+ * mutators that change E.buf should record undo via undopush*.
+ */
 
 static bool isword(int c)
 {
@@ -1426,6 +1438,11 @@ static int usecount(void)
 	return E.count ? E.count : 1;
 }
 
+/*
+ * vi-ish command engine.
+ * applymotion() resolves a motion (with count), then applies any pending op.
+ */
+
 static void applymotion(int key)
 {
 	int n;
@@ -1501,6 +1518,8 @@ static void applymotion(int key)
 
 	normreset();
 }
+
+/* parse one key in NORMAL mode (counts, operators, motions, and commands). */
 
 static void normkey(int key)
 {
@@ -1680,6 +1699,11 @@ static void inskey(int key)
 	if (clamp)
 		clampcur();
 }
+
+/*
+ * ':' command line.
+ * cmdkey() edits E.cmd; cmdexec() runs a tiny set of ex commands.
+ */
 
 static void cmdexec(void)
 {
