@@ -1638,7 +1638,10 @@ static int findanchnext(const char *pat, size_t plen, int a0, int a1, size_t sta
 	ls = linestart(start);
 	if (start != ls) {
 		le = lineend(start);
-		ls = (le < E.buf.len && E.buf.s[le] == '\n') ? le + 1 : E.buf.len;
+		if (le < E.buf.len && E.buf.s[le] == '\n')
+			ls = le + 1;
+		else
+			return 0;
 	}
 
 	for (;;) {
@@ -1712,7 +1715,10 @@ static int findanchnextrange(const char *pat, size_t plen, int a0, int a1, size_
 	ls = linestart(start);
 	if (start != ls) {
 		le = lineend(start);
-		ls = (le < E.buf.len && E.buf.s[le] == '\n') ? le + 1 : E.buf.len;
+		if (le < E.buf.len && E.buf.s[le] == '\n')
+			ls = le + 1;
+		else
+			return 0;
 	}
 
 	for (;;) {
