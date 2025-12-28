@@ -121,54 +121,31 @@ static struct {
 	int insgrp;
 } E;
 
-static int
-linecount(void);
-static void
-normreset(void);
-static void
-yankset(size_t a, size_t b, bool linewise);
-static void
-bufdelrange(size_t a, size_t b);
-static void
-setwinsz(void);
-static void
-undoclear(void);
-static void
-undopushins(size_t at, const void *p, size_t n, size_t cur, bool merge);
-static void
-undopushdel(size_t at, const void *p, size_t n, size_t cur);
-static void
-undodo(void);
-static void
-enterinsert(void);
+static int linecount(void);
+static void normreset(void);
+static void yankset(size_t a, size_t b, bool linewise);
+static void bufdelrange(size_t a, size_t b);
+static void setwinsz(void);
+static void undoclear(void);
+static void undopushins(size_t at, const void *p, size_t n, size_t cur, bool merge);
+static void undopushdel(size_t at, const void *p, size_t n, size_t cur);
+static void undodo(void);
+static void enterinsert(void);
 
-static size_t
-utfprev(const char *s, size_t len, size_t i);
-static size_t
-utfnext(const char *s, size_t len, size_t i);
+static size_t utfprev(const char *s, size_t len, size_t i);
+static size_t utfnext(const char *s, size_t len, size_t i);
 
-static int
-findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos);
-static int
-findprev(const char *s, size_t slen, const char *pat, size_t plen, size_t before, size_t *pos);
-static void
-searchdo(int dir);
-static void
-subcmd(const char *cmd, size_t rs, size_t re, int hasrange);
-static void
-bufinsert(size_t at, const void *p, size_t n);
-static int
-runstdout(const char *cmd, struct sbuf *out, int *ws);
-static void
-vison(void);
-static void
-visoff(void);
-static int
-visrange(size_t *a, size_t *b);
-static int
-viswant(void);
-static void
-viskey(int key);
+static int findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos);
+static int findprev(const char *s, size_t slen, const char *pat, size_t plen, size_t before, size_t *pos);
+static void searchdo(int dir);
+static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange);
+static void bufinsert(size_t at, const void *p, size_t n);
+static int runstdout(const char *cmd, struct sbuf *out, int *ws);
+static void vison(void);
+static void visoff(void);
+static int visrange(size_t *a, size_t *b);
+static int viswant(void);
+static void viskey(int key);
 
 static void
 onsigwinch(int sig)
