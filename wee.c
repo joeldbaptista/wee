@@ -569,7 +569,7 @@ off2row(size_t off)
 	hi = (size_t)E.linelen;
 	while (lo + 1 < hi) {
 		size_t mid;
-		mid = (lo + hi) / 2;
+		mid = lo + (hi - lo) / 2;
 		if (E.linest[mid] <= off)
 			lo = mid;
 		else
