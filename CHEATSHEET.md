@@ -7,6 +7,7 @@ This is a quick reference for *implemented* functionality.
 - **NORMAL**: navigation + operators
 - **INSERT**: text entry
 - **CMD**: ex command line (entered with `:`)
+- **VISUAL**: select text (entered with `v`)
 
 Mode switching:
 
@@ -18,6 +19,7 @@ Mode switching:
 - `C` → INSERT (change to end-of-line)
 - `Esc` → NORMAL (steps cursor back one char if possible)
 - `:` → CMD
+- `v` → VISUAL (toggle)
 
 ## movement (motions)
 
@@ -52,6 +54,8 @@ Search:
 - `/{pattern}` — search forward (literal text)
 - `n` — repeat search forward
 - `N` — repeat search backward
+
+In VISUAL mode, search moves the cursor and extends the selection.
 
 Counts:
 
@@ -128,6 +132,8 @@ Substitute (literal text, not regex):
 - `:s/old/new/g` — substitute all matches on the current line
 - `:%s/old/new/` — substitute first match on every line
 - `:%s/old/new/g` — substitute all matches in the whole file
+
+In VISUAL mode, `:s/.../.../` and `:%s/.../.../g` operate on the selection range.
 
 Options:
 

@@ -23,6 +23,7 @@ make
 ## implemented
 
 - Modes: NORMAL / INSERT / CMD
+- Modes: NORMAL / INSERT / VISUAL / CMD
 - Raw terminal UI with status line
 - Motions: `h j k l`, `w b e`, `0 $`, `gg`, `G`, `{n}G`, `t{char}`, `f{char}`
 - Counts: `{n}{motion}` and `{n}{op}{motion}` where supported
@@ -31,7 +32,8 @@ make
 - Text objects (inner): `di{char}`, `yi{char}`, `ci{char}` for paired delimiters
 - Ex commands: `:w`, `:q`, `:q!`, `:wq`
 - Search: `/{pattern}` with `n`/`N`
-- Substitute: `:s/old/new/` and `:%s/old/new/g` (literal text)
+- Search: `/{pattern}` with `n`/`N` (works in VISUAL too)
+- Substitute: `:s/old/new/` and `:%s/old/new/g` (literal text; in VISUAL applies to selection)
 - Options: `:set nu`, `:set nonu`, `:set rnu`, `:set nornu`
 - Line number gutter: absolute and relative numbering
 - Tabs: insert literal `\t`, render with fixed tabstop of 8

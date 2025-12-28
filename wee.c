@@ -43,6 +43,7 @@ enum {
 enum mode {
 	mnormal,
 	minsert,
+	mvisual,
 	mcmd,
 };
 
@@ -86,12 +87,14 @@ static struct {
 	int textrows;
 
 	enum mode mode;
+	enum mode prevmode;
 	char *filename;
 	bool dirty;
 
 	struct sbuf buf;
 	/* byte offset into buf (kept on utf-8 lead bytes). */
 	size_t cur;
+	size_t vmark;
 
 	int rowoff; /* top line number (0-based) */
 	int coloff; /* left column (0-based) */
@@ -128,11 +131,19 @@ static void undopushdel(size_t at, const void *p, size_t n, size_t cur);
 static void undodo(void);
 static void enterinsert(void);
 
+static size_t utfprev(const char *s, size_t len, size_t i);
+static size_t utfnext(const char *s, size_t len, size_t i);
+
 static int findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos);
 static int findprev(const char *s, size_t slen, const char *pat, size_t plen, size_t before, size_t *pos);
 static void searchdo(int dir);
-static void subcmd(const char *cmd);
+static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange);
 static void bufinsert(size_t at, const void *p, size_t n);
+static void vison(void);
+static void visoff(void);
+static int visrange(size_t *a, size_t *b);
+static int viswant(void);
+static void viskey(int key);
 
 static void onsigwinch(int sig)
 {
@@ -330,10 +341,47 @@ static const char *modestr(void)
 		return "NORMAL";
 	case minsert:
 		return "INSERT";
+	case mvisual:
+		return "VISUAL";
 	case mcmd:
 		return "CMD";
 	}
 	return "?";
+}
+
+static void vison(void)
+{
+	E.vmark = E.cur;
+	E.mode = mvisual;
+}
+
+static void visoff(void)
+{
+	E.mode = mnormal;
+}
+
+static int viswant(void)
+{
+	return E.mode == mvisual || (E.mode == mcmd && E.prevmode == mvisual);
+}
+
+static int visrange(size_t *a, size_t *b)
+{
+	size_t lo, hi;
+
+	if (!viswant())
+		return 0;
+	lo = E.vmark < E.cur ? E.vmark : E.cur;
+	hi = E.vmark < E.cur ? E.cur : E.vmark;
+	if (hi < E.buf.len)
+		hi = utfnext(E.buf.s, E.buf.len, hi);
+	if (lo > E.buf.len)
+		lo = E.buf.len;
+	if (hi > E.buf.len)
+		hi = E.buf.len;
+	*a = lo;
+	*b = hi;
+	return 1;
 }
 
 static int ndigits(int n)
@@ -668,6 +716,9 @@ static void drawrows(struct sbuf *ab)
 		int cols;
 		int col;
 		size_t i;
+		int inv;
+		size_t sa, sb;
+		int hasvis;
 
 		ls = off;
 		lineno = E.rowoff + y + 1;
@@ -686,6 +737,7 @@ static void drawrows(struct sbuf *ab)
 			}
 		} else {
 			le = lineend(ls);
+			hasvis = visrange(&sa, &sb);
 			if (w) {
 				char nb[32];
 				int n;
@@ -699,16 +751,26 @@ static void drawrows(struct sbuf *ab)
 					sbufins(ab, ab->len, nb, (size_t)n);
 			}
 			col = 0;
+			inv = 0;
 			i = ls;
 			while (i < le && i < E.buf.len && E.buf.s[i] != '\n') {
 				unsigned char c;
 				size_t j;
 				int k;
 				int n;
+				int wantinv;
 
 				if (col >= E.coloff + cols)
 					break;
 				c = (unsigned char)E.buf.s[i];
+				wantinv = hasvis && i >= sa && i < sb;
+				if (wantinv != inv) {
+					if (wantinv)
+						sbufins(ab, ab->len, "\x1b[7m", 4);
+					else
+						sbufins(ab, ab->len, "\x1b[m", 3);
+					inv = wantinv;
+				}
 				if (c == '\t') {
 					n = tabstop - (col % tabstop);
 					for (k = 0; k < n; k++) {
@@ -729,6 +791,8 @@ static void drawrows(struct sbuf *ab)
 				col++;
 				i = j;
 			}
+			if (inv)
+				sbufins(ab, ab->len, "\x1b[m", 3);
 			off = (le < E.buf.len && E.buf.s[le] == '\n') ? le + 1 : le;
 		}
 		sbufins(ab, ab->len, "\x1b[K", 3);
@@ -1447,7 +1511,6 @@ static void searchdo(int dir)
 
 	if (E.search.len == 0) {
 		setstatus("no previous search");
-		E.mode = mnormal;
 		return;
 	}
 
@@ -1455,7 +1518,6 @@ static void searchdo(int dir)
 		start = (E.cur < E.buf.len) ? utfnext(E.buf.s, E.buf.len, E.cur) : E.cur;
 		if (!findnext(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
 			setstatus("pattern not found");
-			E.mode = mnormal;
 			return;
 		}
 	} else {
@@ -1464,18 +1526,16 @@ static void searchdo(int dir)
 			start = utfprev(E.buf.s, E.buf.len, start);
 		if (!findprev(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
 			setstatus("pattern not found");
-			E.mode = mnormal;
 			return;
 		}
 	}
 
 	E.cur = pos;
 	clampcur();
-	E.mode = mnormal;
-	setstatus("NORMAL");
+	setstatus("match");
 }
 
-static void subcmd(const char *cmd)
+static void subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 {
 	int all;
 	int global;
@@ -1545,16 +1605,28 @@ static void subcmd(const char *cmd)
 	}
 
 	{
-		size_t rs, re, pos, next;
+		size_t pos, next;
 		int nsub;
 		int first;
 
-		if (all) {
-			rs = 0;
-			re = E.buf.len;
+		if (!hasrange) {
+			if (all) {
+				rs = 0;
+				re = E.buf.len;
+			} else {
+				rs = linestart(E.cur);
+				re = lineend(E.cur);
+			}
 		} else {
-			rs = linestart(E.cur);
-			re = lineend(E.cur);
+			if (rs > E.buf.len)
+				rs = E.buf.len;
+			if (re > E.buf.len)
+				re = E.buf.len;
+			if (re < rs) {
+				size_t t = rs;
+				rs = re;
+				re = t;
+			}
 		}
 
 		nsub = 0;
@@ -1899,13 +1971,20 @@ static void normkey(int key)
 		E.op = 'c';
 		break;
 	case ':':
+		E.prevmode = E.mode;
 		E.mode = mcmd;
 		E.cmdpre = ':';
 		sbufsetlen(&E.cmd, 0);
 		setstatus("CMD");
 		normreset();
 		break;
+	case 'v':
+		vison();
+		setstatus("VISUAL");
+		normreset();
+		break;
 	case '/':
+		E.prevmode = E.mode;
 		E.mode = mcmd;
 		E.cmdpre = '/';
 		sbufsetlen(&E.cmd, 0);
@@ -1941,6 +2020,96 @@ static void normkey(int key)
 			setstatus("op %c cancelled", E.op);
 			normreset();
 		}
+		break;
+	}
+}
+
+static void viskey(int key)
+{
+	size_t a, b;
+
+	if (key >= '0' && key <= '9') {
+		if (E.count == 0 && key == '0') {
+			applymotion('0');
+			return;
+		}
+		E.count = E.count * 10 + (key - '0');
+		return;
+	}
+
+	switch (key) {
+	case kesc:
+	case 'v':
+		visoff();
+		setstatus("NORMAL");
+		normreset();
+		break;
+	case 'd':
+		if (visrange(&a, &b)) {
+			yankset(a, b, false);
+			bufdelrange(a, b);
+		}
+		visoff();
+		setstatus("NORMAL");
+		normreset();
+		break;
+	case 'y':
+		if (visrange(&a, &b)) {
+			yankset(a, b, false);
+			setstatus("yanked %zu bytes", E.yank.len);
+		}
+		visoff();
+		normreset();
+		break;
+	case 'c':
+		if (visrange(&a, &b)) {
+			yankset(a, b, false);
+			bufdelrange(a, b);
+			enterinsert();
+			setstatus("INSERT");
+		}
+		visoff();
+		normreset();
+		break;
+	case ':':
+		E.prevmode = E.mode;
+		E.mode = mcmd;
+		E.cmdpre = ':';
+		sbufsetlen(&E.cmd, 0);
+		setstatus("CMD");
+		normreset();
+		break;
+	case '/':
+		E.prevmode = E.mode;
+		E.mode = mcmd;
+		E.cmdpre = '/';
+		sbufsetlen(&E.cmd, 0);
+		setstatus("/");
+		normreset();
+		break;
+	case 'n':
+		searchdo(+1);
+		normreset();
+		break;
+	case 'N':
+		searchdo(-1);
+		normreset();
+		break;
+	case kleft: applymotion('h'); break;
+	case kright: applymotion('l'); break;
+	case kup: applymotion('k'); break;
+	case kdown: applymotion('j'); break;
+	case 'h': case 'j': case 'k': case 'l':
+	case 'w': case 'b': case 'e':
+	case '$':
+	case 't':
+	case 'f':
+	case 'g':
+	case 'G':
+		applymotion(key);
+		break;
+	default:
+		/* ignore */
 		break;
 	}
 }
@@ -2003,17 +2172,30 @@ static void cmdexec(void)
 {
 	if (E.cmdpre == '/') {
 		searchdo(+1);
+		E.mode = E.prevmode;
+		if (E.mode == mvisual)
+			setstatus("VISUAL");
+		else
+			setstatus("NORMAL");
 		return;
 	}
 
 	if (E.cmd.len == 0) {
-		E.mode = mnormal;
-		setstatus("NORMAL");
+		E.mode = E.prevmode;
+		setstatus(E.mode == mvisual ? "VISUAL" : "NORMAL");
 		return;
 	}
 	if (E.cmd.s[0] == 's' || (E.cmd.s[0] == '%' && E.cmd.s[1] == 's')) {
-		subcmd(E.cmd.s);
-		E.mode = mnormal;
+		if (E.prevmode == mvisual) {
+			size_t a, b;
+			if (visrange(&a, &b))
+				subcmd(E.cmd.s, a, b, 1);
+			visoff();
+			E.mode = mnormal;
+		} else {
+			subcmd(E.cmd.s, 0, 0, 0);
+			E.mode = mnormal;
+		}
 		return;
 	}
 	if (!strcmp(E.cmd.s, "set nu")) {
@@ -2075,15 +2257,15 @@ static void cmdexec(void)
 	}
 
 	setstatus("unknown command: %s", E.cmd.s);
-	E.mode = mnormal;
+	E.mode = E.prevmode;
 }
 
 static void cmdkey(int key)
 {
 	switch (key) {
 	case kesc:
-		E.mode = mnormal;
-		setstatus("NORMAL");
+		E.mode = E.prevmode;
+		setstatus(E.mode == mvisual ? "VISUAL" : "NORMAL");
 		break;
 	case kenter:
 		cmdexec();
@@ -2120,6 +2302,9 @@ static void processkey(void)
 	case minsert:
 		inskey(key);
 		break;
+	case mvisual:
+		viskey(key);
+		break;
 	case mcmd:
 		cmdkey(key);
 		break;
@@ -2141,9 +2326,11 @@ int main(int argc, char **argv)
 		die("sigaction: %s", strerror(errno));
 
 	E.mode = mnormal;
+	E.prevmode = mnormal;
 	E.filename = NULL;
 	E.dirty = false;
 	E.cur = 0;
+	E.vmark = 0;
 	E.rowoff = 0;
 	E.coloff = 0;
 	E.count = 0;
