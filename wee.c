@@ -16,6 +16,14 @@
 #include <time.h>
 #include <unistd.h>
 
+/*
+ * wee is a small vi-ish editor.
+ *
+ * the whole file lives in a single growable byte buffer (E.buf).
+ * cursor and motions operate on byte offsets into that buffer.
+ * lines are separated by '\n'. the screen is redrawn on each key.
+ */
+
 enum {
 	knull = 0,
 	kesc = 27,
@@ -42,12 +50,19 @@ enum {
 	tabstop = 8,
 };
 
+/* simple growable byte buffer used for the file, yank, cmdline, and undo text. */
 struct sbuf {
 	char *s;
 	size_t len;
 	size_t cap;
 };
 
+/*
+ * undo is a stack of edits.
+ * for inserts we store the inserted bytes so undo can delete them.
+ * for deletes we store the removed bytes so undo can reinsert them.
+ * grp is used to coalesce typed inserts within one INSERT session.
+ */
 struct undo {
 	int kind; /* 'i' insert, 'd' delete */
 	size_t at;
@@ -58,10 +73,13 @@ struct undo {
 
 static struct termios origterm;
 
+/* set on SIGWINCH; checked in input loop to force a redraw. */
 static volatile sig_atomic_t winch;
 
+/* suppress undo recording while applying an undo. */
 static bool undomute;
 
+/* editor state. most fields are manipulated directly for simplicity. */
 static struct {
 	int screenrows;
 	int screencols;
@@ -72,7 +90,8 @@ static struct {
 	bool dirty;
 
 	struct sbuf buf;
-	size_t cur; /* byte offset in buf */
+	/* byte offset into buf (kept on utf-8 lead bytes). */
+	size_t cur;
 
 	int rowoff; /* top line number (0-based) */
 	int coloff; /* left column (0-based) */
@@ -223,6 +242,10 @@ static void rawon(void)
 		die("tcsetattr: %s", strerror(errno));
 }
 
+/*
+ * read one keypress.
+ * returns knull on timeout or resize so the main loop can redraw.
+ */
 static int readkey(void)
 {
 	char c;
@@ -482,6 +505,7 @@ static void clampcur(void)
 		E.cur = utfprev(E.buf.s, E.buf.len, E.cur);
 }
 
+/* undo stack storage; grows as needed. */
 static void undogrow(int need)
 {
 	int nc;
@@ -564,6 +588,7 @@ static void undodo(void)
 	}
 
 	u = E.undo[--E.undolen];
+	/* apply without recording a new undo step. */
 	undomute = true;
 	if (u.kind == 'i') {
 		if (u.at <= E.buf.len)
@@ -1281,6 +1306,7 @@ static void bufdelrange(size_t a, size_t b)
 	cur = E.cur;
 	n = b - a;
 	if (a < E.buf.len)
+		/* record the deleted bytes for undo. */
 		undopushdel(a, E.buf.s + a, n, cur);
 
 	sbufdel(&E.buf, a, n);
