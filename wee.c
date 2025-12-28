@@ -131,6 +131,9 @@ static void undopushins(size_t at, const void *p, size_t n, size_t cur, bool mer
 static void undopushdel(size_t at, const void *p, size_t n, size_t cur);
 static void undodo(void);
 static void enterinsert(void);
+static void pasteafter(void);
+
+static int parsesubex(const char *cmd, const char **sub, int *r0, int *r1);
 
 static size_t utfprev(const char *s, size_t len, size_t i);
 static size_t utfnext(const char *s, size_t len, size_t i);
@@ -2001,31 +2004,214 @@ searchdo(int dir)
 	setstatus("match");
 }
 
+static const char *
+skips(const char *p)
+{
+	while (*p == ' ' || *p == '\t')
+		p++;
+	return p;
+}
+
+static int
+addrfindline(const char *s, size_t n, int startrow)
+{
+	size_t start;
+	size_t pos;
+	int row;
+	int lcount;
+
+	if (n == 0)
+		return -1;
+	if (startrow < 1)
+		startrow = 1;
+	lcount = linecount();
+	if (startrow > lcount)
+		startrow = lcount;
+
+	start = row2off(startrow - 1);
+	if (findnext(E.buf.s, E.buf.len, s, n, start, &pos)) {
+		row = off2row(pos) + 1;
+		return row;
+	}
+	if (start > 0 && findnext(E.buf.s, E.buf.len, s, n, 0, &pos)) {
+		row = off2row(pos) + 1;
+		return row;
+	}
+	return -1;
+}
+
+static int
+parseaddr(const char **pp, int *outrow)
+{
+	const char *p;
+	int base;
+	int lcount;
+
+	p = skips(*pp);
+	base = -1;
+	lcount = linecount();
+
+	if (*p == '.') {
+		base = off2row(E.cur) + 1;
+		p++;
+	} else if (*p == '$') {
+		base = lcount;
+		p++;
+	} else if (isdigit((unsigned char)*p)) {
+		long v;
+		v = 0;
+		while (isdigit((unsigned char)*p)) {
+			v = v * 10 + (*p - '0');
+			p++;
+			if (v > 1000000)
+				break;
+		}
+		base = (int)v;
+	} else if (*p == '/') {
+		size_t i;
+		struct sbuf lit = {0};
+		int found;
+
+		p++;
+		for (i = 0; p[i]; i++) {
+			char c;
+			c = p[i];
+			if (c == '\\' && p[i + 1]) {
+				i++;
+				sbufins(&lit, lit.len, &p[i], 1);
+				continue;
+			}
+			if (c == '/')
+				break;
+			sbufins(&lit, lit.len, &c, 1);
+		}
+		if (p[i] != '/') {
+			sbuffree(&lit);
+			return 0;
+		}
+		found = addrfindline(lit.s, lit.len, off2row(E.cur) + 1);
+		sbuffree(&lit);
+		if (found < 0)
+			return 0;
+		base = found;
+		p += i + 1;
+	}
+
+	if (base < 0)
+		return 0;
+
+	for (;;) {
+		int sign;
+		int n;
+
+		p = skips(p);
+		sign = 0;
+		if (*p == '+') {
+			sign = +1;
+			p++;
+		} else if (*p == '-') {
+			sign = -1;
+			p++;
+		} else {
+			break;
+		}
+		p = skips(p);
+		n = 0;
+		if (!isdigit((unsigned char)*p))
+			n = 1;
+		while (isdigit((unsigned char)*p)) {
+			n = n * 10 + (*p - '0');
+			p++;
+			if (n > 1000000)
+				break;
+		}
+		base += sign * n;
+	}
+
+	if (base < 1)
+		base = 1;
+	if (base > lcount)
+		base = lcount;
+
+	*outrow = base;
+	*pp = p;
+	return 1;
+}
+
+static int
+parsesubex(const char *cmd, const char **sub, int *r0, int *r1)
+{
+	const char *p;
+	int a0, a1;
+	int has0, has1;
+
+	p = skips(cmd);
+	has0 = 0;
+	has1 = 0;
+	a0 = 0;
+	a1 = 0;
+
+	if (*p == '%') {
+		a0 = 1;
+		a1 = linecount();
+		has0 = 1;
+		has1 = 1;
+		p++;
+	} else {
+		has0 = parseaddr(&p, &a0);
+		p = skips(p);
+		if (has0 && *p == ',') {
+			p++;
+			has1 = parseaddr(&p, &a1);
+			if (!has1)
+				return 0;
+		} else if (has0) {
+			a1 = a0;
+			has1 = 1;
+		}
+	}
+
+	p = skips(p);
+	if (*p != 's')
+		return 0;
+
+	*sub = p;
+	if (has0 && has1) {
+		*r0 = a0;
+		*r1 = a1;
+		return 2;
+	}
+	return 1;
+}
+
 static void
 subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 {
-	int all;
 	int global;
 	int a0, a1;
 	char delim;
 	size_t i;
+	struct sbuf raw = {0};
 	struct sbuf pat = {0};
 	struct sbuf rep = {0};
+	size_t rangestart;
+	size_t rangeend;
+	size_t firsthit;
+	int firstset;
+	int nsub;
 
-	all = 0;
 	global = 0;
 	a0 = 0;
 	a1 = 0;
-	if (cmd[0] == '%' && cmd[1] == 's') {
-		all = 1;
-		cmd += 2;
-	} else if (cmd[0] == 's') {
-		cmd += 1;
-	} else {
+	firsthit = 0;
+	firstset = 0;
+	nsub = 0;
+
+	if (cmd[0] != 's') {
 		setstatus("unknown command: %s", cmd);
 		return;
 	}
-
+	cmd++;
 	delim = *cmd++;
 	if (delim == 0) {
 		setstatus("bad substitute");
@@ -2034,44 +2220,31 @@ subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 
 	{
 		int esc;
-		bool lastesc;
 		esc = 0;
-		lastesc = false;
 		for (i = 0; cmd[i]; i++) {
 			char c;
 			c = cmd[i];
-			if (!esc && c == '\\' && cmd[i + 1]) {
-				esc = 1;
-				continue;
-			}
 			if (!esc && c == delim)
 				break;
-			if (esc) {
-				lastesc = true;
-				esc = 0;
-			} else {
-				lastesc = false;
-			}
-			if (pat.len == 0 && !lastesc && c == '^') {
-				a0 = 1;
+			if (!esc && c == '\\' && cmd[i + 1]) {
+				esc = 1;
+				sbufins(&raw, raw.len, &c, 1);
 				continue;
 			}
-			sbufins(&pat, pat.len, &c, 1);
+			esc = 0;
+			sbufins(&raw, raw.len, &c, 1);
 		}
 		if (cmd[i] != delim) {
 			setstatus("bad substitute");
 			goto out;
 		}
-		if (pat.len && pat.s[pat.len - 1] == '$' && !lastesc) {
-			a1 = 1;
-			sbufsetlen(&pat, pat.len - 1);
-		}
 	}
-	if (cmd[i] != delim) {
-		setstatus("bad substitute");
+	parsepat(raw.s, raw.len, &pat, &a0, &a1);
+	if (pat.len == 0 && !(a0 || a1)) {
+		setstatus("empty pattern");
 		goto out;
 	}
-	i++;
+	i++; /* skip delim */
 
 	for (; cmd[i]; i++) {
 		char c;
@@ -2092,67 +2265,93 @@ subcmd(const char *cmd, size_t rs, size_t re, int hasrange)
 			global = 1;
 	}
 
-	if (pat.len == 0 && !(a0 || a1)) {
-		setstatus("empty pattern");
-		goto out;
+	if (!hasrange) {
+		rangestart = linestart(E.cur);
+		rangeend = lineend(E.cur);
+	} else {
+		rangestart = rs;
+		rangeend = re;
+		if (rangestart > E.buf.len)
+			rangestart = E.buf.len;
+		if (rangeend > E.buf.len)
+			rangeend = E.buf.len;
+		if (rangeend < rangestart) {
+			size_t t;
+			t = rangestart;
+			rangestart = rangeend;
+			rangeend = t;
+		}
 	}
 
 	{
-		size_t pos, next;
-		int nsub;
-		int first;
+		size_t ls;
 
-		if (!hasrange) {
-			if (all) {
-				rs = 0;
-				re = E.buf.len;
-			} else {
-				rs = linestart(E.cur);
-				re = lineend(E.cur);
-			}
-		} else {
-			if (rs > E.buf.len)
-				rs = E.buf.len;
-			if (re > E.buf.len)
-				re = E.buf.len;
-			if (re < rs) {
-				size_t t = rs;
-				rs = re;
-				re = t;
-			}
-		}
+		ls = linestart(rangestart);
+		for (;;) {
+			size_t le;
+			size_t pos;
 
-		nsub = 0;
-		first = 1;
-		pos = rs;
-		while (pos <= re) {
-			size_t m;
-			if ((a0 || a1) ? !findanchnextrange(pat.s, pat.len, a0, a1, pos, rs, re, &m)
-			              : !findnext(E.buf.s, re, pat.s, pat.len, pos, &m))
+			if (ls > rangeend)
 				break;
-			if (m + pat.len > re)
-				break;
-			nsub++;
-			if (first) {
-				E.cur = m;
-				first = 0;
+			le = lineend(ls);
+			if (le > rangeend)
+				le = rangeend;
+
+			pos = ls;
+			for (;;) {
+				size_t m;
+				size_t next;
+				int ok;
+
+				if ((a0 || a1))
+					ok = findanchnextrange(pat.s, pat.len, a0, a1, pos, ls, le, &m);
+				else
+					ok = findnext(E.buf.s, le, pat.s, pat.len, pos, &m);
+				if (!ok)
+					break;
+				if (m + pat.len > le)
+					break;
+
+				if (!firstset) {
+					firsthit = m;
+					firstset = 1;
+				}
+				nsub++;
+
+				bufdelrange(m, m + pat.len);
+				bufinsert(m, rep.s, rep.len);
+				next = m + rep.len;
+				le = le + rep.len - pat.len;
+				rangeend = rangeend + rep.len - pat.len;
+
+				if (!global)
+					break;
+				if (pat.len == 0 && (a0 || a1))
+					break;
+				pos = next;
+				if (pos > le)
+					break;
 			}
-			bufdelrange(m, m + pat.len);
-			bufinsert(m, rep.s, rep.len);
-			next = m + rep.len;
-			re = re + rep.len - pat.len;
-			pos = next;
-			if (!global)
-				break;
+
+			le = lineend(ls);
+			if (le < E.buf.len && E.buf.s[le] == '\n') {
+				ls = le + 1;
+				continue;
+			}
+			break;
 		}
-		if (nsub == 0)
-			setstatus("no match");
-		else
-			setstatus("%d substitutions", nsub);
+	}
+
+	if (!firstset) {
+		setstatus("no match");
+	} else {
+		E.cur = firsthit;
 		clampcur();
+		setstatus("%d substitutions", nsub);
 	}
 
 out:
+	sbuffree(&raw);
 	sbuffree(&pat);
 	sbuffree(&rep);
 }
@@ -2163,7 +2362,7 @@ pasteafter(void)
 	size_t at;
 	size_t cur;
 
-	if (!E.yank.len)
+	if (E.yank.len == 0)
 		return;
 
 	if (E.yankline) {
@@ -2734,18 +2933,45 @@ cmdexec(void)
 		setstatus("NORMAL");
 		return;
 	}
-	if (E.cmd.s[0] == 's' || (E.cmd.s[0] == '%' && E.cmd.s[1] == 's')) {
-		if (E.prevmode == mvisual) {
-			size_t a, b;
-			if (visrange(&a, &b))
-				subcmd(E.cmd.s, a, b, 1);
-			visoff();
+	{
+		const char *sub;
+		int r0, r1;
+		int kind;
+
+		sub = NULL;
+		r0 = 0;
+		r1 = 0;
+		kind = parsesubex(E.cmd.s, &sub, &r0, &r1);
+		if (kind) {
+			if (kind == 2) {
+				size_t a, b;
+				a = row2off(r0 - 1);
+				b = lineend(row2off(r1 - 1));
+				subcmd(sub, a, b, 1);
+				if (E.prevmode == mvisual)
+					visoff();
+				E.mode = mnormal;
+				return;
+			}
+			if (E.prevmode == mvisual) {
+				size_t a, b;
+				int sa, sb;
+
+				if (visrange(&a, &b)) {
+					sa = off2row(linestart(a)) + 1;
+					sb = off2row(linestart(b)) + 1;
+					a = row2off(sa - 1);
+					b = lineend(row2off(sb - 1));
+					subcmd(sub, a, b, 1);
+				}
+				visoff();
+				E.mode = mnormal;
+				return;
+			}
+			subcmd(sub, 0, 0, 0);
 			E.mode = mnormal;
-		} else {
-			subcmd(E.cmd.s, 0, 0, 0);
-			E.mode = mnormal;
+			return;
 		}
-		return;
 	}
 	if (!strncmp(E.cmd.s, "run", 3) && (E.cmd.s[3] == 0 || isspace((unsigned char)E.cmd.s[3]))) {
 		const char *p;
