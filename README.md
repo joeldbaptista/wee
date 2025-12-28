@@ -48,3 +48,7 @@ See [CHEATSHEET.md](CHEATSHEET.md) for the full list of implemented commands.
 
 - This is intentionally not `vim`: no plugins, no split windows, no full compatibility goals.
 - UTF-8 handling is “safe stepping” (avoid splitting continuation bytes); display width is still simplified.
+
+## References
+
+- [Write your own text editor](https://viewsourcecode.org/snaptoken/kilo/)
