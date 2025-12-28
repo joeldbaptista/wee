@@ -1491,6 +1491,7 @@ static int runstdout(const char *cmd, struct sbuf *out, int *ws)
 			close(err);
 		}
 
+		execl("/bin/bash", "bash", "-c", cmd, (char *)NULL);
 		execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
 		_exit(127);
 	}
