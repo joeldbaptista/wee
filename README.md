@@ -30,6 +30,8 @@ make
 - Undo: `u`
 - Text objects (inner): `di{char}`, `yi{char}`, `ci{char}` for paired delimiters
 - Ex commands: `:w`, `:q`, `:q!`, `:wq`
+- Search: `/{pattern}` with `n`/`N`
+- Substitute: `:s/old/new/` and `:%s/old/new/g` (literal text)
 - Options: `:set nu`, `:set nonu`, `:set rnu`, `:set nornu`
 - Line number gutter: absolute and relative numbering
 - Tabs: insert literal `\t`, render with fixed tabstop of 8

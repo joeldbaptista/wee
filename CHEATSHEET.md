@@ -47,6 +47,12 @@ Find on line:
 - `t{char}` — move to *before* the next `{char}` on the current line
 - `f{char}` — move to the next `{char}` on the current line
 
+Search:
+
+- `/{pattern}` — search forward (literal text)
+- `n` — repeat search forward
+- `N` — repeat search backward
+
 Counts:
 
 - Prefix most motions with a count, e.g. `10j`, `3w`, `2t)`.
@@ -115,6 +121,13 @@ Files:
 - `:q` — quit (fails if modified)
 - `:q!` — quit without saving
 - `:wq` — write then quit
+
+Substitute (literal text, not regex):
+
+- `:s/old/new/` — substitute first match on the current line
+- `:s/old/new/g` — substitute all matches on the current line
+- `:%s/old/new/` — substitute first match on every line
+- `:%s/old/new/g` — substitute all matches in the whole file
 
 Options:
 

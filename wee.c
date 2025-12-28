@@ -106,6 +106,8 @@ static struct {
 	time_t statustime;
 
 	struct sbuf cmd;
+	char cmdpre;
+	struct sbuf search;
 	bool shownum;
 	bool shownumrel;
 
@@ -125,6 +127,12 @@ static void undopushins(size_t at, const void *p, size_t n, size_t cur, bool mer
 static void undopushdel(size_t at, const void *p, size_t n, size_t cur);
 static void undodo(void);
 static void enterinsert(void);
+
+static int findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos);
+static int findprev(const char *s, size_t slen, const char *pat, size_t plen, size_t before, size_t *pos);
+static void searchdo(int dir);
+static void subcmd(const char *cmd);
+static void bufinsert(size_t at, const void *p, size_t n);
 
 static void onsigwinch(int sig)
 {
@@ -768,7 +776,9 @@ static void drawstatus(struct sbuf *ab)
 static void drawmsg(struct sbuf *ab)
 {
 	if (E.mode == mcmd) {
-		sbufins(ab, ab->len, ":", 1);
+		char p;
+		p = E.cmdpre ? E.cmdpre : ':';
+		sbufins(ab, ab->len, &p, 1);
 		if (E.cmd.len)
 			sbufins(ab, ab->len, E.cmd.s, E.cmd.len);
 		sbufins(ab, ab->len, "\x1b[K", 3);
@@ -1362,6 +1372,225 @@ static void bufdelrange(size_t a, size_t b)
 	clampcur();
 }
 
+static void bufinsert(size_t at, const void *p, size_t n)
+{
+	size_t cur;
+
+	if (n == 0)
+		return;
+	if (at > E.buf.len)
+		at = E.buf.len;
+	cur = E.cur;
+	undopushins(at, p, n, cur, false);
+	sbufins(&E.buf, at, p, n);
+	E.dirty = true;
+}
+
+static int findnext(const char *s, size_t slen, const char *pat, size_t plen, size_t start, size_t *pos)
+{
+	size_t i;
+
+	if (plen == 0)
+		return 0;
+	if (start > slen)
+		return 0;
+	if (plen > slen)
+		return 0;
+
+	for (i = start; i + plen <= slen; i++) {
+		if (memcmp(s + i, pat, plen) == 0) {
+			*pos = i;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int findprev(const char *s, size_t slen, const char *pat, size_t plen, size_t before, size_t *pos)
+{
+	size_t i;
+	size_t last;
+	int found;
+
+	if (plen == 0)
+		return 0;
+	if (before > slen)
+		before = slen;
+	if (plen > slen)
+		return 0;
+
+	found = 0;
+	last = 0;
+	for (i = 0; i + plen <= before; i++) {
+		if (memcmp(s + i, pat, plen) == 0) {
+			last = i;
+			found = 1;
+		}
+	}
+	if (!found)
+		return 0;
+	*pos = last;
+	return 1;
+}
+
+static void searchdo(int dir)
+{
+	size_t pos;
+	size_t start;
+
+	if (E.cmdpre == '/') {
+		if (E.cmd.len) {
+			sbufsetlen(&E.search, 0);
+			sbufins(&E.search, 0, E.cmd.s, E.cmd.len);
+		}
+	}
+
+	if (E.search.len == 0) {
+		setstatus("no previous search");
+		E.mode = mnormal;
+		return;
+	}
+
+	if (dir >= 0) {
+		start = (E.cur < E.buf.len) ? utfnext(E.buf.s, E.buf.len, E.cur) : E.cur;
+		if (!findnext(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
+			setstatus("pattern not found");
+			E.mode = mnormal;
+			return;
+		}
+	} else {
+		start = E.cur;
+		if (start > 0)
+			start = utfprev(E.buf.s, E.buf.len, start);
+		if (!findprev(E.buf.s, E.buf.len, E.search.s, E.search.len, start, &pos)) {
+			setstatus("pattern not found");
+			E.mode = mnormal;
+			return;
+		}
+	}
+
+	E.cur = pos;
+	clampcur();
+	E.mode = mnormal;
+	setstatus("NORMAL");
+}
+
+static void subcmd(const char *cmd)
+{
+	int all;
+	int global;
+	char delim;
+	size_t i;
+	struct sbuf pat = {0};
+	struct sbuf rep = {0};
+
+	all = 0;
+	global = 0;
+	if (cmd[0] == '%' && cmd[1] == 's') {
+		all = 1;
+		cmd += 2;
+	} else if (cmd[0] == 's') {
+		cmd += 1;
+	} else {
+		setstatus("unknown command: %s", cmd);
+		return;
+	}
+
+	delim = *cmd++;
+	if (delim == 0) {
+		setstatus("bad substitute");
+		return;
+	}
+
+	for (i = 0; cmd[i]; i++) {
+		char c;
+		c = cmd[i];
+		if (c == '\\' && cmd[i + 1]) {
+			i++;
+			sbufins(&pat, pat.len, &cmd[i], 1);
+			continue;
+		}
+		if (c == delim)
+			break;
+		sbufins(&pat, pat.len, &c, 1);
+	}
+	if (cmd[i] != delim) {
+		setstatus("bad substitute");
+		goto out;
+	}
+	i++;
+
+	for (; cmd[i]; i++) {
+		char c;
+		c = cmd[i];
+		if (c == '\\' && cmd[i + 1]) {
+			i++;
+			sbufins(&rep, rep.len, &cmd[i], 1);
+			continue;
+		}
+		if (c == delim)
+			break;
+		sbufins(&rep, rep.len, &c, 1);
+	}
+	if (cmd[i] == delim)
+		i++;
+	for (; cmd[i]; i++) {
+		if (cmd[i] == 'g')
+			global = 1;
+	}
+
+	if (pat.len == 0) {
+		setstatus("empty pattern");
+		goto out;
+	}
+
+	{
+		size_t rs, re, pos, next;
+		int nsub;
+		int first;
+
+		if (all) {
+			rs = 0;
+			re = E.buf.len;
+		} else {
+			rs = linestart(E.cur);
+			re = lineend(E.cur);
+		}
+
+		nsub = 0;
+		first = 1;
+		pos = rs;
+		while (pos <= re) {
+			size_t m;
+			if (!findnext(E.buf.s, re, pat.s, pat.len, pos, &m))
+				break;
+			if (m + pat.len > re)
+				break;
+			nsub++;
+			if (first) {
+				E.cur = m;
+				first = 0;
+			}
+			bufdelrange(m, m + pat.len);
+			bufinsert(m, rep.s, rep.len);
+			next = m + rep.len;
+			re = re + rep.len - pat.len;
+			pos = next;
+			if (!global)
+				break;
+		}
+		if (nsub == 0)
+			setstatus("no match");
+		else
+			setstatus("%d substitutions", nsub);
+		clampcur();
+	}
+
+out:
+	sbuffree(&pat);
+	sbuffree(&rep);
+}
+
 static void pasteafter(void)
 {
 	size_t at;
@@ -1671,8 +1900,24 @@ static void normkey(int key)
 		break;
 	case ':':
 		E.mode = mcmd;
+		E.cmdpre = ':';
 		sbufsetlen(&E.cmd, 0);
 		setstatus("CMD");
+		normreset();
+		break;
+	case '/':
+		E.mode = mcmd;
+		E.cmdpre = '/';
+		sbufsetlen(&E.cmd, 0);
+		setstatus("/");
+		normreset();
+		break;
+	case 'n':
+		searchdo(+1);
+		normreset();
+		break;
+	case 'N':
+		searchdo(-1);
 		normreset();
 		break;
 	case kesc:
@@ -1756,9 +2001,19 @@ static void inskey(int key)
 
 static void cmdexec(void)
 {
+	if (E.cmdpre == '/') {
+		searchdo(+1);
+		return;
+	}
+
 	if (E.cmd.len == 0) {
 		E.mode = mnormal;
 		setstatus("NORMAL");
+		return;
+	}
+	if (E.cmd.s[0] == 's' || (E.cmd.s[0] == '%' && E.cmd.s[1] == 's')) {
+		subcmd(E.cmd.s);
+		E.mode = mnormal;
 		return;
 	}
 	if (!strcmp(E.cmd.s, "set nu")) {
@@ -1896,6 +2151,7 @@ int main(int argc, char **argv)
 	E.status[0] = 0;
 	E.shownum = false;
 	E.shownumrel = false;
+	E.cmdpre = ':';
 	E.undo = NULL;
 	E.undolen = 0;
 	E.undocap = 0;
@@ -1903,6 +2159,7 @@ int main(int argc, char **argv)
 	sbufsetlen(&E.buf, 0);
 	sbufsetlen(&E.yank, 0);
 	sbufsetlen(&E.cmd, 0);
+	sbufsetlen(&E.search, 0);
 
 	if (argc >= 2) {
 		E.filename = strdup(argv[1]);
