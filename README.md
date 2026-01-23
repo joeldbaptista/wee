@@ -10,6 +10,8 @@ In this new version, all the modules are isolated in interface and implementatio
 Currently the underlying data structure to process the text is a simple dynamic array of characters, as in busybox `vi`.
 However, I may change that just to make things more efficient.
 
+The most important future change is the use of a simple parser to consume the commands inputted by the user. Currently that's a bit meggled into the code.
+
 ## build
 
 ```sh
