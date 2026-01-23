@@ -1,9 +1,14 @@
 # wee
 
-`wee` is a minimal vi-like editor in a **single C file**.
-It aims to stay small and dependency-free (closer in spirit to `busybox vi` than `vim`).
+`wee` is a minimal `vi`-like editor. It aims to stay small and dependency-free (closer in spirit to `busybox vi` than `vim`).
 
 The editing model is intentionally simple: the file is stored as one contiguous byte buffer with `\n` line breaks.
+
+This is the 2nd iteration of this project. The original project was a quick "tour de force" to implement something as simple as the busybox `vi`.
+In this new version, all the modules are isolated in interface and implementation. 
+
+Currently the underlying data structure to process the text is a simple dynamic array of characters, as in busybox `vi`.
+However, I may change that just to make things more efficient.
 
 ## build
 
